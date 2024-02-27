@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"rootDir": "src",
+		"target": "es6",
+		"module": "commonjs",
+		"lib": ["es2015"],
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"allowImportingTsExtensions": true,
+		"allowJs": true,
+		"typeRoots": ["node_modules/@types", "types"]
+	},
+	"include": ["src/**/*"],
+	"exclude": ["src/**/*.test.ts"]
+}

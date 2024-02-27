@@ -1,0 +1,45 @@
+{
+  "name": "nanolex",
+  "version": "0.1.0",
+  "description": "Parser grammar builder",
+  "main": "./dist/nanolex.js",
+  "module": "./dist/nanolex.mjs",
+  "types": "./dist/nanolex.d.ts",
+  "scripts": {
+    "build": "esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.js --format=cjs && esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.mjs --format=esm && npm run declarations",
+    "dev": "node ./scripts/dev.mjs",
+    "lint": "biome ci src scripts",
+    "declarations": "tsc --declarationDir dist --emitDeclarationOnly --declaration",
+    "postbuild": "cat package.json | sed '/\\\"devDependencies\\\"/,/}/ d; /^$/d' | sed 's/\\.\\/dist\\//\\.\\//g' > ./dist/package.json && cp README.md dist && cp LICENSE dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Marcisbee/nanolex.git"
+  },
+  "keywords": [
+    "grammars",
+    "parsing",
+    "parser-library",
+    "tokenizer",
+    "lexer"
+  ],
+  "author": "Marcis <marcisbergmanis@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Marcisbee/nanolex/issues"
+  },
+  "homepage": "https://github.com/Marcisbee/nanolex#readme",
+  "devDependencies": {
+    "@biomejs/biome": "^1.5.3",
+    "esbuild": "^0.20.1",
+    "typescript": "^5.3.3"
+  },
+  "exports": {
+    "./package.json": "./dist/package.json",
+    ".": {
+      "types": "./dist/nanolex.d.ts",
+      "require": "./dist/nanolex.js",
+      "import": "./dist/nanolex.mjs"
+    }
+  }
+}
