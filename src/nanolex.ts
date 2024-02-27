@@ -8,7 +8,7 @@ export function createToken(
 	token: RegExp | string,
 	name: string = typeof token === "string" ? token : token.source,
 	skip = false,
-) {
+): TokenLike {
 	const isString = typeof token === "string";
 	const source = isString
 		? token.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
@@ -425,6 +425,7 @@ interface GrammarLike<T = any> {
 }
 
 interface TokenLike {
+	token: string | RegExp;
 	name: string;
 	source: string;
 	skip: boolean;
