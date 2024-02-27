@@ -48,10 +48,10 @@ export function parser(value: string) {
 
 	function FUNCTION() {
 		return and([
-      consume(TOKENS.Identifier),
-      consume(TOKENS.LParen),
+      consume(Identifier),
+      consume(LParen),
       PARAMS,
-      consume(TOKENS.RParen),
+      consume(RParen),
     ], transform)();
 
     function transform([name, _, params]) {
@@ -66,13 +66,13 @@ export function parser(value: string) {
 	function PARAMS() {
 		return zeroOrManySep(
       VALUE,
-      consume(TOKENS.Comma),
+      consume(Comma),
     )();
 	}
 
 	function VALUE() {
 		return or([
-			consume(TOKENS.Number, Number),
+			consume(Integer, Number),
 			FUNCTION,
 		])();
 	}
