@@ -11,7 +11,7 @@ npm i nanolex
 ```
 
 ```ts
-import { createToken, framework, getComposedTokens } from "nanolex";
+import { createToken, nanolex, getComposedTokens } from "nanolex";
 
 // Define tokens
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace", /* skip */ true);
@@ -42,7 +42,7 @@ export function parser(value: string) {
     and,
     or,
     throwIfError,
-  } = framework(value, tokens);
+  } = nanolex(value, tokens);
 
   // Write parser grammar patterns here
 
