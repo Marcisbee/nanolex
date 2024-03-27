@@ -1,4 +1,4 @@
-import { createToken, framework, getComposedTokens } from "../src/nanolex.ts";
+import { createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
 
 const LineBreak = createToken(/[\n\r]/, "LineBreak", true);
 const Whitespace = createToken(/[ \t]+/, "Whitespace", true);
@@ -54,7 +54,7 @@ export function parser(value: string) {
 		and,
 		or,
 		throwIfError,
-	} = framework(value, tokens);
+	} = nanolex(value, tokens);
 
 	function TEST(fn: Function) {
 		return () => {

@@ -36,7 +36,7 @@ export function createToken(
 }
 
 const chunksCache: Record<string, string[]> = {};
-export function framework(
+export function nanolex(
 	value: string,
 	{ id, tokensParse, tokensSkip }: ReturnType<typeof getComposedTokens>,
 ) {

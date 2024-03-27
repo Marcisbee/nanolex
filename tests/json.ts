@@ -1,4 +1,4 @@
-import { createToken, framework, getComposedTokens } from "../src/nanolex.ts";
+import { createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
 
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace", true);
 const True = createToken("true");
@@ -44,7 +44,7 @@ export function parser(value: string) {
 		and,
 		or,
 		throwIfError,
-	} = framework(value, tokens);
+	} = nanolex(value, tokens);
 
 	const cache: Record<string, any> = {};
 
