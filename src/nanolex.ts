@@ -40,8 +40,7 @@ export function framework(
 	value: string,
 	{ id, tokensParse, tokensSkip }: ReturnType<typeof getComposedTokens>,
 ) {
-	const lastI = [-1 | 0, -1 | 0];
-	const depth = [0 | 0, 0 | 0];
+	const loopIndexMap: Record<number, number> = {};
 	const chunks = (chunksCache[value + id] ??= value.split(tokensParse));
 	// chunks ??= value.split(tokensParse);
 	// const chunks = value.split(tokensParse);
@@ -77,6 +76,7 @@ export function framework(
 		not,
 		and,
 		or,
+		breakLoop,
 		throwIfError,
 	};
 
@@ -214,20 +214,12 @@ export function framework(
 	function and<T extends GrammarLike[]>(
 		rules: T,
 		transform?: (value: any) => any,
-		maxDepth = 10,
 	): GrammarLike {
-		return tryDepth(0, (): any => {
+		return (): any => {
 			const output = [];
 			const tempI = i;
 
 			for (const rule of rules) {
-				if (depth[0] > maxDepth) {
-					saveError(deepestError);
-					return;
-				}
-
-				lastI[0] = i;
-
 				innerError = undefined;
 				const resultRule = rule();
 
@@ -244,24 +236,16 @@ export function framework(
 			}
 
 			return output;
-		});
+		};
 	}
 	function or<T extends GrammarLike[]>(
 		rules: T,
 		transform?: (value: any) => any,
-		maxDepth = 10,
 	): GrammarLike {
-		return tryDepth(1, (): any => {
+		return (): any => {
 			const tempI = i;
 
 			for (const rule of rules) {
-				if (depth[1] > maxDepth) {
-					saveError(deepestError);
-					return;
-				}
-
-				lastI[1] = i;
-
 				i = tempI;
 				innerError = undefined;
 				const resultRule = rule();
@@ -280,10 +264,10 @@ export function framework(
 			i = tempI;
 
 			return;
-		});
+		};
 	}
 	function zeroOrOne<T extends GrammarLike>(rule: T): GrammarLike {
-		return (() => {
+		return (): any => {
 			const tempI = i;
 			innerError = undefined;
 			const resultRule = rule();
@@ -295,7 +279,7 @@ export function framework(
 			}
 
 			return resultRule;
-		}) as any;
+		};
 	}
 	function consumeUntil(token: TokenLike): GrammarLike<any[]> {
 		return (): any => {
@@ -408,24 +392,18 @@ export function framework(
 
 		return output;
 	}
+	function breakLoop<T extends Function>(type: number, fn: T): T {
+		if (loopIndexMap[type] === i) {
+			// Break out of loop
+			return (() => {
+				saveError(deepestError);
+				loopIndexMap[type] = undefined as any;
+			}) as any;
+		}
 
-	// Utilities
-	function tryDepth<T extends Function>(type: number, fn: T): T {
-		return ((...args: any[]) => {
-			const depthed = lastI[type] === i;
+		loopIndexMap[type] = i;
 
-			if (!depthed) {
-				return fn(...args);
-			}
-
-			depth[type] += 1 | 0;
-
-			const output = fn(...args);
-
-			depth[type] -= 1 | 0;
-
-			return output;
-		}) as any;
+		return fn;
 	}
 }
 
