@@ -12,20 +12,23 @@ export function createToken(
 	const source = isString
 		? token.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
 		: token.source;
-	const _c: Record<string, boolean> = {};
+	const cache = new Map<string, boolean>();
 
 	return {
 		token,
 		name,
 		source,
-		test(value: string) {
+		test(value: string): boolean {
 			if (isString) {
 				return value === token;
 			}
 
 			// return value.match(token)?.[0] === value;
 
-			return (_c[value] ??= value.match(token)?.[0] === value);
+			let v: boolean;
+			return cache.has(value)
+				? cache.get(value)!
+				: ((v = value.match(token)?.[0] === value), cache.set(value, v), v);
 
 			// const regex = new RegExp(`^${this.source}\$`);
 			// return regex.test(value);
