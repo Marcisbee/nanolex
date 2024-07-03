@@ -1,6 +1,6 @@
 import { createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
 
-const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace", /* skip */ true);
+const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
 const OperatorPlus = createToken("+");
 const Integer = createToken(/-?\d+/, "Integer");
 
@@ -16,8 +16,13 @@ export function parser(value: string) {
 		and,
 		or,
 		breakLoop,
+		patternToSkip,
 		throwIfError,
 	} = nanolex(value, tokens);
+
+	patternToSkip(or([
+		consume(Whitespace),
+	]));
 
 	function BinaryExpression() {
 		return and(

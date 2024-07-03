@@ -7,7 +7,6 @@ type ErrorToken = {
 export function createToken(
 	token: RegExp | string,
 	name: string = typeof token === "string" ? token : token.source,
-	skip = false,
 ): TokenLike {
 	const isString = typeof token === "string";
 	const source = isString
@@ -19,7 +18,6 @@ export function createToken(
 		token,
 		name,
 		source,
-		skip,
 		test(value: string) {
 			if (isString) {
 				return value === token;
@@ -38,8 +36,10 @@ export function createToken(
 const chunksCache: Record<string, string[]> = {};
 export function nanolex(
 	value: string,
-	{ id, tokensParse, tokensSkip }: ReturnType<typeof getComposedTokens>,
+	{ id, tokensParse }: ReturnType<typeof getComposedTokens>,
 ) {
+	let skipCheck = false;
+	let tokensSkip: Function = () => void 0;
 	const loopIndexMap: Record<number, number> = {};
 	const chunks = (chunksCache[value + id] ??= value.split(tokensParse));
 	// chunks ??= value.split(tokensParse);
@@ -77,8 +77,19 @@ export function nanolex(
 		and,
 		or,
 		breakLoop,
+		patternToSkip,
 		throwIfError,
 	};
+
+	function patternToSkip(tokens: GrammarLike) {
+		tokensSkip = () => {
+			skipCheck = true;
+			const result = tokens();
+			skipCheck = false;
+
+			return result;
+		};
+	}
 
 	function saveError(error?: ErrorToken) {
 		innerError = error;
@@ -320,7 +331,7 @@ export function nanolex(
 			let c: string;
 
 			while (((c = chunks[i]), i < chunksLength)) {
-				if (!c || (!token.skip && tokensSkip.test(c))) {
+				if (!c) {
 					i += 1;
 					continue;
 				}
@@ -334,6 +345,12 @@ export function nanolex(
 
 					return c;
 				}
+
+				const currI = i;
+				if (!skipCheck && tokensSkip() !== undefined) {
+					continue;
+				}
+				i = currI;
 
 				break;
 			}
@@ -361,10 +378,16 @@ export function nanolex(
 			let c: string;
 
 			while (((c = chunks[i]), i < chunksLength)) {
-				if (!c || tokensSkip.test(c)) {
+				if (!c) {
 					i += 1;
 					continue;
 				}
+
+				const currI = i;
+				if (!skipCheck && tokensSkip() !== undefined) {
+					continue;
+				}
+				i = currI;
 
 				saveError({
 					got: c,
@@ -408,7 +431,7 @@ export function nanolex(
 }
 
 function getCodeLens(chunks: string[], i: number) {
-	const c = chunks[i];
+	const c = chunks[i] || "";
 	const textBefore = chunks.slice(0, i + 1).join("");
 	const lines = textBefore.split("\n");
 	const lineBefore = lines.pop() || "";
@@ -420,7 +443,7 @@ function getCodeLens(chunks: string[], i: number) {
 		: "";
 	const codeLensTarget = ` ${lines.length + 1}| ${lineBefore}`;
 	const codeLensPointer = `   ${new Array(
-		lineBefore.length - c.length + String(lines.length + 1).length,
+		Math.max(lineBefore.length - c.length + String(lines.length + 1).length, 0),
 	)
 		.fill(" ")
 		.join("")}${new Array(c.length).fill("^").join("") || "^"}`;
@@ -434,36 +457,19 @@ interface GrammarLikeResponse<T = any> {
 	response: T;
 }
 
-interface GrammarLike<T = any> {
-	(): GrammarLikeResponse<T>;
-}
+type GrammarLike<T = any> = () => GrammarLikeResponse<T>;
 
 interface TokenLike {
 	token: string | RegExp;
 	name: string;
 	source: string;
-	skip: boolean;
 	test: (value: string) => boolean;
 }
 
 let composedTokenId = 0;
 export function getComposedTokens(tokens: TokenLike[]) {
-	const skipTokens: string[] = [];
-
 	return {
 		id: composedTokenId++,
-		tokensParse: new RegExp(
-			"(" +
-				tokens
-					.map((t) => {
-						t.skip && skipTokens.push(t.source);
-						return t.source;
-					})
-					.join("|") +
-				")",
-		),
-		tokensSkip: skipTokens.length
-			? new RegExp("^" + skipTokens.join("|") + "$")
-			: { test: () => false },
+		tokensParse: new RegExp("(" + tokens.map((t) => t.source).join("|") + ")"),
 	};
 }

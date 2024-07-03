@@ -14,7 +14,7 @@ npm i nanolex
 import { createToken, nanolex, getComposedTokens } from "nanolex";
 
 // Define tokens
-const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace", /* skip */ true);
+const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
 const LParen = createToken("(");
 const RParen = createToken(")");
 const Comma = createToken(",");
@@ -41,8 +41,13 @@ export function parser(value: string) {
     zeroOrManySep,
     and,
     or,
+    patternToSkip,
     throwIfError,
   } = nanolex(value, tokens);
+
+  // Write patterns to skip, in this case ignore whitespace
+  // Pattern is just grammar
+  patternToSkip(consume(Whitespace));
 
   // Write parser grammar patterns here
 

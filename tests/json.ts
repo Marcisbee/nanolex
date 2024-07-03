@@ -1,6 +1,6 @@
 import { createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
 
-const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace", true);
+const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
 const True = createToken("true");
 const False = createToken("false");
 const Null = createToken("null");
@@ -43,8 +43,13 @@ export function parser(value: string) {
 		zeroOrManySep,
 		and,
 		or,
+		patternToSkip,
 		throwIfError,
 	} = nanolex(value, tokens);
+
+	patternToSkip(or([
+		consume(Whitespace),
+	]));
 
 	const cache: Record<string, any> = {};
 
