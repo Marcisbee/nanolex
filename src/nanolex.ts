@@ -4,6 +4,8 @@ type ErrorToken = {
 	i: number;
 };
 
+export const EOF = Symbol("EOF") as any as TokenLike;
+
 export function createToken(
 	token: RegExp | string,
 	name: string = typeof token === "string" ? token : token.source,
@@ -59,7 +61,6 @@ export function nanolex(
 	return {
 		consume,
 		consumeUntil,
-		consumeEOF,
 		peek,
 		oneOrMany: (rule: GrammarLike, transformer?: (value: any) => any) =>
 			many(rule, 1, transformer),
@@ -307,13 +308,17 @@ export function nanolex(
 					continue;
 				}
 
-				if (!token.test(c)) {
+				if (token === EOF || !token.test(c)) {
 					i += 1;
 
 					output.push(c);
 					continue;
 				}
 
+				return output;
+			}
+
+			if (EOF) {
 				return output;
 			}
 
@@ -339,7 +344,7 @@ export function nanolex(
 					continue;
 				}
 
-				if (token.test(c)) {
+				if (token !== EOF && token.test(c)) {
 					i += 1;
 
 					if (transform) {
@@ -358,6 +363,10 @@ export function nanolex(
 				break;
 			}
 
+			if (token === EOF && i >= chunksLength) {
+				return;
+			}
+
 			if (c == null) {
 				saveError({
 					got: c,
@@ -373,31 +382,6 @@ export function nanolex(
 				i: i,
 			});
 			return;
-		};
-	}
-	function consumeEOF(): GrammarLike<undefined> {
-		return (): any => {
-			// consumeTimes += 1;
-			let c: string;
-
-			while (((c = chunks[i]), i < chunksLength)) {
-				if (!c) {
-					i += 1;
-					continue;
-				}
-
-				const currI = i;
-				if (!skipCheck && tokensSkip() !== undefined) {
-					continue;
-				}
-				i = currI;
-
-				saveError({
-					got: c,
-					i,
-				});
-				return;
-			}
 		};
 	}
 	function throwIfError<T extends GrammarLike>(rule: T): any {

@@ -1,4 +1,4 @@
-import { createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
+import { EOF, createToken, nanolex, getComposedTokens } from "../src/nanolex.ts";
 
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
 const True = createToken("true");
@@ -37,7 +37,6 @@ const tokens = getComposedTokens([
 export function parser(value: string) {
 	const {
 		consume,
-		consumeEOF,
 		zeroOrOne,
 		zeroOrMany,
 		zeroOrManySep,
@@ -112,7 +111,7 @@ export function parser(value: string) {
 		))();
 	}
 
-	const [output] = throwIfError(and([Json, consumeEOF()])) as any;
+	const [output] = throwIfError(and([Json, consume(EOF)])) as any;
 
 	return output;
 }

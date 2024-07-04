@@ -11,7 +11,7 @@ npm i nanolex
 ```
 
 ```ts
-import { createToken, nanolex, getComposedTokens } from "nanolex";
+import { EOF, createToken, nanolex, getComposedTokens } from "nanolex";
 
 // Define tokens
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
@@ -35,7 +35,6 @@ export function parser(value: string) {
   // Initiate grammar
   const {
     consume,
-    consumeEOF,
     zeroOrOne,
     zeroOrMany,
     zeroOrManySep,
@@ -83,7 +82,7 @@ export function parser(value: string) {
   }
 
   // Run the grammar
-  const [output] = throwIfError(and([FUNCTION, consumeEOF()]));
+  const [output] = throwIfError(and([FUNCTION, consume(EOF)]));
 
   return output;
 }
