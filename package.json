@@ -8,7 +8,7 @@
   "scripts": {
     "build": "esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.js --format=cjs && esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.mjs --format=esm && npm run declarations",
     "dev": "node ./scripts/dev.mjs",
-    "lint": "biome ci src",
+    "lint": "deno lint",
     "declarations": "tsc --declarationDir dist --emitDeclarationOnly --declaration",
     "postbuild": "cat package.json | sed '/\\\"devDependencies\\\"/,/}/ d; /^$/d' | sed 's/\\.\\/dist\\//\\.\\//g' > ./dist/package.json && cp README.md dist && cp LICENSE dist"
   },

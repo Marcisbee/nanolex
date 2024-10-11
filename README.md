@@ -11,7 +11,7 @@ npm i nanolex
 ```
 
 ```ts
-import { EOF, createToken, nanolex, getComposedTokens } from "nanolex";
+import { createToken, EOF, getComposedTokens, nanolex } from "nanolex";
 
 // Define tokens
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
