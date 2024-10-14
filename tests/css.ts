@@ -47,7 +47,12 @@ const NumberLiteral = createToken(
 );
 const StringLiteral = createToken(/[a-zA-Z_$][a-zA-Z0-9_$-]*/, "StringLiteral");
 const FromTo = createToken(/from|to/);
-const Keyframes = createToken(/keyframes/);
+const Keyframes = createToken("keyframes");
+const Media = createToken("media");
+const And = createToken("and");
+const Or = createToken("or");
+const Only = createToken("only");
+const Not = createToken("not");
 
 const tokens = getComposedTokens([
   Whitespace,
@@ -143,14 +148,16 @@ export function parser(value: string) {
     return and(
       [
         consume(Colon),
+        zeroOrOne(consume(Colon)),
         consume(StringLiteral),
         zeroOrOne(and([consume(LParen), zeroOrOne(VALUE), consume(RParen)])),
       ],
-      ([_, name, [, value] = []]) => ({
+      ([_, double, name, [, value] = []]) => ({
         type: "selector",
         scope: "pseudo",
         name,
         value,
+        double: !!double,
       }),
     )();
   }
@@ -443,16 +450,102 @@ export function parser(value: string) {
         ),
         consume(RCurly),
       ],
-      ([, , name, , selectors]) => ({
-        type: "keyframes",
+      ([, , name, , ruleset]) => ({
+        type: "atrule",
+        scope: "keyframes",
         name,
-        selectors,
+        ruleset,
+      }),
+    )();
+  }
+
+  function MEDIA_FEATURE() {
+    return and([
+      consume(LParen),
+      or([
+        and([
+          consume(StringLiteral),
+          consume(Colon),
+          VALUE,
+        ], ([name, , value]) => ({
+          type: "feature-name",
+          name,
+          value,
+        })),
+        consume(StringLiteral, (name) => ({
+          type: "feature-name",
+          name,
+        })),
+        // @TODO range
+      ]),
+      consume(RParen),
+    ], ([, value]) => ({
+      type: "media-feature",
+      value,
+    }))();
+  }
+
+  function MEDIA_CONDITION() {
+    return or([
+      MEDIA_FEATURE,
+      consume(StringLiteral),
+    ])();
+  }
+
+  function MEDIA_QUERY() {
+    return or([
+      and([
+        or([
+          consume(Only),
+          consume(Not),
+        ]),
+        consume(StringLiteral),
+        zeroOrOne(and([
+          consume(And),
+          MEDIA_CONDITION,
+        ], ([scope, value]) => ({
+          type: "media-query-condition",
+          scope,
+          value,
+        }))),
+      ], ([scope, media_type, condition]) => ({
+        type: "media-query",
+        scope,
+        media_type,
+        condition,
+      })),
+      MEDIA_CONDITION,
+    ])();
+  }
+
+  function MEDIA_QUERIES() {
+    return oneOrManySep(
+      MEDIA_QUERY,
+      consume(Comma),
+    )();
+  }
+
+  function MEDIA() {
+    return and(
+      [
+        consume(At),
+        consume(Media),
+        MEDIA_QUERIES,
+        consume(LCurly),
+        zeroOrMany(RULESET),
+        consume(RCurly),
+      ],
+      ([, , query, , ruleset]) => ({
+        type: "atrule",
+        scope: "media",
+        query,
+        ruleset,
       }),
     )();
   }
 
   function PROGRAM() {
-    return zeroOrMany(or([RULESET, KEYFRAMES]))();
+    return zeroOrMany(or([RULESET, KEYFRAMES, MEDIA]))();
   }
 
   const [output] = throwIfError(and([PROGRAM, consume(EOF)]));

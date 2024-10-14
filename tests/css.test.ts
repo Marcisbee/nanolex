@@ -367,6 +367,7 @@ Deno.test(`more complex css 2`, () => {
             scope: "pseudo",
             type: "selector",
             value: undefined,
+            double: false,
           },
         ],
       ],
@@ -459,7 +460,7 @@ Deno.test(`keyframes`, () => {
   const expectation = [
     {
       name: "slidein",
-      selectors: [
+      ruleset: [
         {
           rules: [
             {
@@ -523,11 +524,12 @@ Deno.test(`keyframes`, () => {
           type: "frame",
         },
       ],
-      type: "keyframes",
+      scope: "keyframes",
+      type: "atrule",
     },
     {
       name: "identifier",
-      selectors: [
+      ruleset: [
         {
           rules: [
             {
@@ -652,9 +654,198 @@ Deno.test(`keyframes`, () => {
           type: "frame",
         },
       ],
-      type: "keyframes",
+      scope: "keyframes",
+      type: "atrule",
     },
   ];
   assertEquals(parser(input), expectation);
 });
 
+Deno.test(`media`, () => {
+  const input = `
+    abbr {
+      color: chocolate;
+    }
+
+    @media (hover: hover) {
+      abbr:hover {
+        color: limegreen;
+        transition-duration: 1s;
+      }
+    }
+
+    @media not all and (hover: hover) {
+      abbr::after {
+        content: ' (' attr(title) ')';
+      }
+    }
+  `;
+  const expectation = [
+    {
+      rules: [
+        {
+          important: false,
+          name: {
+            name: "color",
+            type: "literal",
+          },
+          type: "rule",
+          value: [
+            "chocolate",
+          ],
+        },
+      ],
+      selectors: [
+        [
+          {
+            name: "abbr",
+            scope: "tag",
+            type: "selector",
+          },
+        ],
+      ],
+      type: "ruleset",
+    },
+    {
+      query: [
+        {
+          type: "media-feature",
+          value: {
+            name: "hover",
+            type: "feature-name",
+            value: [
+              "hover",
+            ],
+          },
+        },
+      ],
+      ruleset: [
+        {
+          rules: [
+            {
+              important: false,
+              name: {
+                name: "color",
+                type: "literal",
+              },
+              type: "rule",
+              value: [
+                "limegreen",
+              ],
+            },
+            {
+              important: false,
+              name: {
+                name: "transition-duration",
+                type: "literal",
+              },
+              type: "rule",
+              value: [
+                {
+                  type: "time",
+                  unit: "s",
+                  value: 1,
+                },
+              ],
+            },
+          ],
+          selectors: [
+            [
+              {
+                name: "abbr",
+                scope: "tag",
+                type: "selector",
+              },
+              {
+                double: false,
+                name: "hover",
+                scope: "pseudo",
+                type: "selector",
+                value: undefined,
+              },
+            ],
+          ],
+          type: "ruleset",
+        },
+      ],
+      scope: "media",
+      type: "atrule",
+    },
+    {
+      query: [
+        {
+          condition: {
+            scope: "and",
+            type: "media-query-condition",
+            value: {
+              type: "media-feature",
+              value: {
+                name: "hover",
+                type: "feature-name",
+                value: [
+                  "hover",
+                ],
+              },
+            },
+          },
+          media_type: "all",
+          scope: "not",
+          type: "media-query",
+        },
+      ],
+      ruleset: [
+        {
+          rules: [
+            {
+              important: false,
+              name: {
+                name: "content",
+                type: "literal",
+              },
+              type: "rule",
+              value: [
+                {
+                  type: "text",
+                  value: " (",
+                },
+                {
+                  name: "attr",
+                  type: "fn",
+                  value: [
+                    [
+                      "title",
+                    ],
+                  ],
+                },
+                {
+                  type: "text",
+                  value: ")",
+                },
+              ],
+            },
+          ],
+          selectors: [
+            [
+              {
+                name: "abbr",
+                scope: "tag",
+                type: "selector",
+              },
+              {
+                double: true,
+                name: "after",
+                scope: "pseudo",
+                type: "selector",
+                value: undefined,
+              },
+            ],
+          ],
+          type: "ruleset",
+        },
+      ],
+      scope: "media",
+      type: "atrule",
+    },
+  ];
+  assertEquals(parser(input), expectation);
+});
