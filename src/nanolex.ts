@@ -1,7 +1,14 @@
+// deno-lint-ignore-file ban-unused-ignore no-explicit-any ban-types
 type ErrorToken = {
-  got: string;
+  value?: string;
+  got?: string;
   token?: TokenLike;
   i: number;
+};
+
+type ComposedTokens = {
+  id: number;
+  tokensParse: RegExp;
 };
 
 export const EOF = Symbol("EOF") as any as TokenLike;
@@ -42,7 +49,46 @@ const chunksCache: Record<string, string[]> = {};
 export function nanolex(
   value: string,
   { id, tokensParse }: ReturnType<typeof getComposedTokens>,
-) {
+): {
+  consume: <Return = string>(
+    token: TokenLike,
+    transform?: ((value: string) => Return) | undefined,
+  ) => GrammarLike<(Return extends any ? string : Return) | undefined>;
+  consumeUntil: (token: TokenLike) => GrammarLike<any[]>;
+  peek: (rule: GrammarLike) => GrammarLike;
+  oneOrMany: (
+    rule: GrammarLike,
+    transformer?: ((value: any) => any) | undefined,
+  ) => GrammarLike<any>;
+  zeroOrMany: (
+    rule: GrammarLike,
+    transformer?: ((value: any) => any) | undefined,
+  ) => GrammarLike<any>;
+  oneOrManySep: (
+    rule: GrammarLike,
+    sep: GrammarLike,
+    transformer?: ((value: any) => any) | undefined,
+  ) => GrammarLike<any>;
+  zeroOrManySep: (
+    rule: GrammarLike,
+    sep: GrammarLike,
+    transformer?: ((value: any) => any) | undefined,
+  ) => GrammarLike<any>;
+  zeroOrOne: <T extends GrammarLike<any>>(rule: T) => GrammarLike;
+  not: (rule: GrammarLike) => GrammarLike;
+  and: <T extends GrammarLike<any>[]>(
+    rules: T,
+    transform?: ((value: any) => any) | undefined,
+  ) => GrammarLike;
+  or: <T extends GrammarLike<any>[]>(
+    rules: T,
+    transform?: ((value: any) => any) | undefined,
+  ) => GrammarLike;
+  breakLoop: <T extends Function>(type: number, fn: T) => T;
+  patternToSkip: (tokens: GrammarLike) => void;
+  throwIfError: <T extends GrammarLike<any>>(rule: T) => any;
+  createError: (value: string) => void;
+} {
   let skipCheck = false;
   let tokensSkip: Function = () => void 0;
   const loopIndexMap: Record<number, number> = {};
@@ -83,6 +129,7 @@ export function nanolex(
     breakLoop,
     patternToSkip,
     throwIfError,
+    createError,
   };
 
   function patternToSkip(tokens: GrammarLike) {
@@ -108,6 +155,13 @@ export function nanolex(
     }
 
     return deepestError;
+  }
+
+  function createError(value: string) {
+    saveError({
+      value,
+      i,
+    });
   }
 
   function many(
@@ -390,12 +444,13 @@ export function nanolex(
     // console.log({ consumeTimes });
 
     if (i !== chunksLength && deepestError) {
-      const i = deepestError.i;
+      const i = deepestError.value ? deepestError.i - 1 : deepestError.i;
 
       const [codeLens, position] = getCodeLens(chunks, i);
-      const deepestErrorMessage = `expecting "${
-        deepestError.token?.name ?? "EOF"
-      }", got "${deepestError.got ?? "EOF"}"`;
+      const deepestErrorMessage = deepestError.value ||
+        `expecting "${deepestError.token?.name ?? "EOF"}", got "${
+          deepestError.got ?? "EOF"
+        }"`;
 
       throw new Error(`${deepestErrorMessage} at ${position}${codeLens}`);
     }
@@ -459,7 +514,7 @@ interface TokenLike {
 }
 
 let composedTokenId = 0;
-export function getComposedTokens(tokens: TokenLike[]) {
+export function getComposedTokens(tokens: TokenLike[]): ComposedTokens {
   return {
     id: composedTokenId++,
     tokensParse: new RegExp("(" + tokens.map((t) => t.source).join("|") + ")"),

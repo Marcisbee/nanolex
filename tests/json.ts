@@ -1,3 +1,4 @@
+// deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars
 import {
   createToken,
   EOF,
