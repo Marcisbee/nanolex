@@ -1,5 +1,5 @@
 {
-  "version": "3",
+  "version": "4",
   "remote": {
     "https://deno.land/std@0.215.0/assert/_constants.ts": "a271e8ef5a573f1df8e822a6eb9d09df064ad66a4390f21b3e31f820a38e0975",
     "https://deno.land/std@0.215.0/assert/_diff.ts": "dcc63d94ca289aec80644030cf88ccbf7acaa6fbd7b0f22add93616b36593840",
@@ -37,8 +37,7 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
-        "npm:@biomejs/biome@^1.5.3",
-        "npm:esbuild@^0.20.1",
+        "npm:esbuild@~0.20.1",
         "npm:typescript@^5.3.3"
       ]
     }
