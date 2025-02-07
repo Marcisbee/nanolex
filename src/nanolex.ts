@@ -350,7 +350,10 @@ export function nanolex(
       return resultRule;
     };
   }
-  function consumeUntil(token: TokenLike): GrammarLike<any[]> {
+  function consumeUntil<Return = string[]>(
+    token: TokenLike,
+    transform?: (value: string[]) => Return,
+  ): GrammarLike<any[]> {
     return (): any => {
       // consumeTimes += 1;
       let c: string;
@@ -369,10 +372,18 @@ export function nanolex(
           continue;
         }
 
+        if (transform) {
+          return transform(output);
+        }
+
         return output;
       }
 
       if (EOF) {
+        if (transform) {
+          return transform(output);
+        }
+
         return output;
       }
 
