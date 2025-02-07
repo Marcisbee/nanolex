@@ -335,7 +335,10 @@ export function nanolex(
       return;
     };
   }
-  function zeroOrOne<T extends GrammarLike>(rule: T): GrammarLike {
+  function zeroOrOne<T extends GrammarLike>(
+    rule: T,
+    transform?: (value?: any) => any,
+  ): GrammarLike {
     return (): any => {
       const tempI = i;
       innerError = undefined;
@@ -344,7 +347,16 @@ export function nanolex(
       if (innerError) {
         i = tempI;
         innerError = undefined;
+
+        if (transform) {
+          return transform();
+        }
+
         return;
+      }
+
+      if (transform) {
+        return transform(resultRule);
       }
 
       return resultRule;
