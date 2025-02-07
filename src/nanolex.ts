@@ -191,7 +191,7 @@ export function nanolex(
         output.push(resultRule);
       }
 
-      if (transform) {
+      if (innerError === undefined && transform) {
         return transform(output);
       }
 
@@ -300,7 +300,7 @@ export function nanolex(
         output.push(resultRule);
       }
 
-      if (transform) {
+      if (innerError === undefined && transform) {
         return transform(output);
       }
 
@@ -323,7 +323,7 @@ export function nanolex(
           continue;
         }
 
-        if (transform) {
+        if (innerError === undefined && transform) {
           return transform(resultRule);
         }
 
