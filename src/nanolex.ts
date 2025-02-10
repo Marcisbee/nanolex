@@ -48,7 +48,7 @@ export function createToken(
 const chunksCache: Record<string, string[]> = {};
 export function nanolex(
   value: string,
-  { id, tokensParse }: ReturnType<typeof getComposedTokens>,
+  { id, tokensParse }: ComposedTokens,
 ): {
   consume: <Return = string>(
     token: TokenLike,
