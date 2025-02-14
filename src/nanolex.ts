@@ -513,8 +513,10 @@ export function nanolex(
 
   // Utils
   function checkUntil(until: GrammarLike) {
+    const tempI = i;
     innerError = undefined;
     until();
+    i = tempI;
 
     if (!innerError) {
       return true;

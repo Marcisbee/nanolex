@@ -15,6 +15,7 @@ const Underscore = createToken("_");
 const Tilde = createToken("`");
 const Lt = createToken("<");
 const Gt = createToken(">");
+const Equal = createToken("=");
 
 const tokens = getComposedTokens([
   Whitespace,
@@ -25,6 +26,7 @@ const tokens = getComposedTokens([
   Tilde,
   Lt,
   Gt,
+  Equal,
 ]);
 
 export function parser(value: string) {
@@ -35,7 +37,6 @@ export function parser(value: string) {
     zeroOrMany,
     and,
     or,
-    peek,
     throwIfError,
   } = nanolex(value, tokens);
 
@@ -54,8 +55,31 @@ export function parser(value: string) {
     )();
   }
 
+  function BlockHeadingWithUnderline() {
+    return and(
+      [
+        oneOrMany(
+          InlineText,
+          undefined,
+          and([
+            consume(NewLine),
+            consume(Equal),
+            consume(Equal),
+            consume(Equal),
+          ]),
+        ),
+        and([consume(NewLine), consume(Equal), consume(Equal), consume(Equal)]),
+      ],
+      ([content]) => ({
+        type: "h",
+        size: 1,
+        content,
+      }),
+    )();
+  }
+
   function Block() {
-    return or([BlockHeading, Text])();
+    return or([BlockHeading, BlockHeadingWithUnderline, Text])();
   }
 
   function Bold() {
@@ -66,7 +90,7 @@ export function parser(value: string) {
         oneOrMany(
           or([Italic2, InlineCode, consume(Anything)]),
           undefined,
-          peek(and([consume(Star), consume(Star)])),
+          and([consume(Star), consume(Star)]),
         ),
         consume(Star),
         consume(Star),
