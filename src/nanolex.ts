@@ -45,11 +45,7 @@ export function createToken(
   };
 }
 
-const chunksCache: Record<string, string[]> = {};
-export function nanolex(
-  value: string,
-  { id, tokensParse }: ComposedTokens,
-): {
+export interface Nanolex {
   consume: <Return = string>(
     token: TokenLike,
     transform?: ((value: string) => Return) | undefined,
@@ -59,20 +55,24 @@ export function nanolex(
   oneOrMany: (
     rule: GrammarLike,
     transformer?: ((value: any) => any) | undefined,
+    until?: GrammarLike,
   ) => GrammarLike<any>;
   zeroOrMany: (
     rule: GrammarLike,
     transformer?: ((value: any) => any) | undefined,
+    until?: GrammarLike,
   ) => GrammarLike<any>;
   oneOrManySep: (
     rule: GrammarLike,
     sep: GrammarLike,
     transformer?: ((value: any) => any) | undefined,
+    until?: GrammarLike,
   ) => GrammarLike<any>;
   zeroOrManySep: (
     rule: GrammarLike,
     sep: GrammarLike,
     transformer?: ((value: any) => any) | undefined,
+    until?: GrammarLike,
   ) => GrammarLike<any>;
   zeroOrOne: <T extends GrammarLike<any>>(rule: T) => GrammarLike;
   not: (rule: GrammarLike) => GrammarLike;
@@ -88,7 +88,13 @@ export function nanolex(
   patternToSkip: (tokens: GrammarLike) => void;
   throwIfError: <T extends GrammarLike<any>>(rule: T) => any;
   createError: (value: string) => void;
-} {
+}
+
+const chunksCache: Record<string, string[]> = {};
+export function nanolex(
+  value: string,
+  { id, tokensParse }: ComposedTokens,
+): Nanolex {
   let skipCheck = false;
   let tokensSkip: Function = () => void 0;
   const loopIndexMap: Record<number, number> = {};
@@ -108,20 +114,20 @@ export function nanolex(
     consume,
     consumeUntil,
     peek,
-    oneOrMany: (rule: GrammarLike, transformer?: (value: any) => any) =>
-      many(rule, 1, transformer),
-    zeroOrMany: (rule: GrammarLike, transformer?: (value: any) => any) =>
-      many(rule, 0, transformer),
+    oneOrMany: (rule, transformer, until) => many(rule, 1, transformer, until),
+    zeroOrMany: (rule, transformer, until) => many(rule, 0, transformer, until),
     oneOrManySep: (
-      rule: GrammarLike,
-      sep: GrammarLike,
-      transformer?: (value: any) => any,
-    ) => manySep(rule, sep, 1, transformer),
+      rule,
+      sep,
+      transformer,
+      until,
+    ) => manySep(rule, sep, 1, transformer, until),
     zeroOrManySep: (
-      rule: GrammarLike,
-      sep: GrammarLike,
-      transformer?: (value: any) => any,
-    ) => manySep(rule, sep, 0, transformer),
+      rule,
+      sep,
+      transformer,
+      until,
+    ) => manySep(rule, sep, 0, transformer, until),
     zeroOrOne,
     not,
     and,
@@ -168,13 +174,14 @@ export function nanolex(
     rule: GrammarLike,
     atLest: number,
     transform?: (value: any) => any,
+    until?: GrammarLike,
   ): GrammarLike {
     return (): any => {
       const output = [];
 
       while (i < chunksLength) {
         innerError = undefined;
-        const tempI = i;
+        let tempI = i;
         const resultRule = rule();
 
         if (innerError) {
@@ -189,6 +196,10 @@ export function nanolex(
         }
 
         output.push(resultRule);
+
+        if (until && checkUntil(until)) {
+          break;
+        }
       }
 
       if (innerError === undefined && transform) {
@@ -203,6 +214,7 @@ export function nanolex(
     sep: GrammarLike,
     atLest: number,
     transformer?: (value: any) => any,
+    until?: GrammarLike,
   ): GrammarLike {
     return (): any => {
       let tempI = i;
@@ -239,6 +251,10 @@ export function nanolex(
         if (innerError) {
           innerError = undefined;
           i = tempI;
+          break;
+        }
+
+        if (until && checkUntil(until)) {
           break;
         }
       }
@@ -362,6 +378,7 @@ export function nanolex(
       return resultRule;
     };
   }
+  // @TODO: handle consumeUntil(and(...))
   function consumeUntil<Return = string[]>(
     token: TokenLike,
     transform?: (value: string[]) => Return,
@@ -492,6 +509,20 @@ export function nanolex(
     loopIndexMap[type] = i;
 
     return fn;
+  }
+
+  // Utils
+  function checkUntil(until: GrammarLike) {
+    innerError = undefined;
+    until();
+
+    if (!innerError) {
+      return true;
+    }
+
+    innerError = undefined;
+
+    return false;
   }
 }
 
