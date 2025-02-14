@@ -1,6 +1,6 @@
 {
   "name": "nanolex",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Parser grammar builder",
   "main": "./dist/nanolex.js",
   "module": "./dist/nanolex.mjs",
