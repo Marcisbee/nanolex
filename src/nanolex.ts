@@ -181,7 +181,7 @@ export function nanolex(
 
       while (i < chunksLength) {
         innerError = undefined;
-        let tempI = i;
+        const tempI = i;
         const resultRule = rule();
 
         if (innerError) {
