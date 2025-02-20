@@ -7,7 +7,7 @@ import {
 } from "../src/nanolex.ts";
 
 const Whitespace = createToken(/[ \t]+/);
-const NewLine = createToken(/[\n\r]+/);
+const NewLine = createToken(/[\n\r]/);
 const Anything = createToken(/.*/);
 const Hash = createToken("#");
 const Star = createToken("*");
@@ -37,6 +37,8 @@ export function parser(value: string) {
     zeroOrMany,
     and,
     or,
+    peek,
+    not,
     throwIfError,
   } = nanolex(value, tokens);
 
@@ -153,10 +155,16 @@ export function parser(value: string) {
   }
 
   function Text() {
-    return oneOrMany(InlineText, (content) => ({
-      type: "p",
-      content,
-    }))();
+    return oneOrMany(
+      or([
+        InlineText,
+        and([consume(NewLine), peek(not(consume(NewLine)))], () => "\n"),
+      ]),
+      (content) => ({
+        type: "p",
+        content,
+      }),
+    )();
   }
 
   function Program() {

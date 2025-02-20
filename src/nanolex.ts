@@ -284,7 +284,7 @@ export function nanolex(
     return (): any => {
       // const tempI = i;
 
-      // const tempError = deepestError;
+      const newInnerError = innerError || deepestError;
       // innerError = undefined;
       const resultRule = rule();
 
@@ -292,6 +292,8 @@ export function nanolex(
         innerError = undefined;
         return;
       }
+
+      innerError = newInnerError;
 
       return resultRule;
     };

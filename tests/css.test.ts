@@ -174,18 +174,23 @@ Deno.test(`css selectors`, () => {
             },
           },
         ],
-        [
-          {
-            name: "a",
-            scope: "class",
-            type: "selector",
-          },
-          {
-            name: "b",
-            scope: "class",
-            type: "selector",
-          },
-        ],
+        {
+          scope: "combinator",
+          type: "selector",
+          value: [
+            [{
+              name: "a",
+              scope: "class",
+              type: "selector",
+            }],
+            " ",
+            {
+              name: "b",
+              scope: "class",
+              type: "selector",
+            },
+          ],
+        },
         [
           {
             name: "a",

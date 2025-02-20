@@ -49,3 +49,18 @@ Deno.test(`parses "Hello **\`world\`**!\n===\nHey"`, () => {
     },
   ]);
 });
+
+Deno.test(`parses "foo\nbar\n\nbaz"`, () => {
+  expect(parser("foo\nbar\n\nbaz")).toEqual([
+    {
+      type: "p",
+      content: ["foo", "\n", "bar"],
+    },
+    "\n",
+    "\n",
+    {
+      type: "p",
+      content: ["baz"],
+    },
+  ]);
+});
