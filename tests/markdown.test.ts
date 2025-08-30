@@ -64,3 +64,56 @@ Deno.test(`parses "foo\nbar\n\nbaz"`, () => {
     },
   ]);
 });
+
+Deno.test(`parses "this_not_italic"`, () => {
+  expect(parser("this_not_italic")).toEqual([
+    {
+      type: "p",
+      content: ["this","_","not","_","italic"],
+    },
+  ]);
+});
+
+Deno.test(`parses "this_not_italic_"`, () => {
+  expect(parser("this_not_italic_")).toEqual([
+    {
+      type: "p",
+      content: ["this","_","not","_","italic","_"],
+    },
+  ]);
+});
+
+Deno.test(`parses "_this_not_italic_"`, () => {
+  expect(parser("_this_not_italic_")).toEqual([
+    {
+      type: "p",
+      content: ["_","this","_","not","_","italic","_"],
+    },
+  ]);
+});
+
+Deno.test(`parses "this _is_ italic"`, () => {
+  expect(parser("this _is_ italic")).toEqual([
+    {
+      type: "p",
+      content: ["this"," ",{ type: "i", content: ["is"] }," ","italic"],
+    },
+  ]);
+});
+
+// Deno.test(`parses "foo\n> bar\n> baz\noof"`, () => {
+//   expect(parser("foo\n> bar\n> baz\noof")).toEqual([
+//     {
+//       type: "p",
+//       content: ["foo"],
+//     },
+//     {
+//       type: "q",
+//       content: ["bar", "\n", "baz"],
+//     },
+//     {
+//       type: "p",
+//       content: ["oof"],
+//     },
+//   ]);
+// });
