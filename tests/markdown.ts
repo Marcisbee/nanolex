@@ -16,6 +16,7 @@ const Tilde = createToken("`");
 const Lt = createToken("<");
 const Gt = createToken(">");
 const Equal = createToken("=");
+const Word = createToken(/[a-zA-Z0-9]+/);
 
 const tokens = getComposedTokens([
   Whitespace,
@@ -33,13 +34,16 @@ export function parser(value: string) {
   const {
     consume,
     consumeUntil,
+		consumeBehind,
     oneOrMany,
+    oneOrManySep,
     zeroOrMany,
     and,
     or,
     peek,
     not,
     throwIfError,
+    patternToSkip,
   } = nanolex(value, tokens);
 
   function BlockHeading() {
@@ -80,8 +84,24 @@ export function parser(value: string) {
     )();
   }
 
+  function BlockQuote() {
+    return and(
+      [
+        oneOrManySep(
+          // Simplified inner rule: just parse '> content'
+          and([consume(Gt), zeroOrMany(consume(Whitespace)), zeroOrMany(Block)], ([, content]) => content),
+          consume(NewLine),
+        ),
+      ] as const,
+      ([content]: [string[]]) => ({
+        type: "q",
+        content,
+      }),
+    )();
+  }
+
   function Block() {
-    return or([BlockHeading, BlockHeadingWithUnderline, Text])();
+    return or([BlockQuote, BlockHeading, BlockHeadingWithUnderline, Text])();
   }
 
   function Bold() {
@@ -107,13 +127,15 @@ export function parser(value: string) {
   function Bold2() {
     return and(
       [
+				not(peek(consumeBehind(Word))),
         consume(Underscore),
         consume(Underscore),
         consumeUntil(Underscore),
         consume(Underscore),
         consume(Underscore),
+				not(peek(consume(Word))),
       ],
-      ([, , content]) => ({
+      ([, , , content]) => ({
         type: "b",
         content,
       }),
@@ -132,8 +154,14 @@ export function parser(value: string) {
 
   function Italic2() {
     return and(
-      [consume(Underscore), consumeUntil(Underscore), consume(Underscore)],
-      ([, content]) => ({
+      [
+				not(peek(consumeBehind(Word))),
+				consume(Underscore),
+				consumeUntil(Underscore),
+				consume(Underscore),
+				not(peek(consume(Word))),
+			],
+      ([, , content]) => ({
         type: "i",
         content,
       }),
@@ -151,7 +179,14 @@ export function parser(value: string) {
   }
 
   function InlineText() {
-    return or([Bold, Bold2, Italic, Italic2, InlineCode, consume(Anything)])();
+    return or([
+      Bold,
+      Bold2,
+      Italic,
+      Italic2,
+      InlineCode,
+      consume(Anything),
+    ])();
   }
 
   function Text() {
