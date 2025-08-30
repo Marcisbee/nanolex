@@ -50,6 +50,10 @@ export interface Nanolex {
     token: TokenLike,
     transform?: ((value: string) => Return) | undefined,
   ) => GrammarLike<(Return extends any ? string : Return) | undefined>;
+  consumeBehind: <Return = string>(
+    token: TokenLike,
+    transform?: ((value: string) => Return) | undefined,
+  ) => GrammarLike<(Return extends any ? string : Return) | undefined>;
   consumeUntil: (token: TokenLike) => GrammarLike<any[]>;
   peek: (rule: GrammarLike) => GrammarLike;
   oneOrMany: (
@@ -112,6 +116,7 @@ export function nanolex(
 
   return {
     consume,
+    consumeBehind,
     consumeUntil,
     peek,
     oneOrMany: (rule, transformer, until) => many(rule, 1, transformer, until),
@@ -476,6 +481,54 @@ export function nanolex(
         got: c,
         token,
         i: i,
+      });
+      return;
+    };
+  }
+  function consumeBehind<Return = string>(
+    token: TokenLike,
+    transform?: (value: string) => Return,
+  ): GrammarLike<(Return extends any ? string : Return) | undefined> {
+    return (): any => {
+      let c: string;
+
+      while (((c = chunks[i - 1]), i > 0)) {
+        if (!c) {
+          i -= 1;
+          continue;
+        }
+
+        if (token !== EOF && token.test(c)) {
+          i -= 1;
+
+          if (transform) {
+            return transform(c);
+          }
+
+          return c;
+        }
+
+        // We do not perform skip checks in reverse
+        break;
+      }
+
+      if (token === EOF && i <= 0) {
+        return;
+      }
+
+      if (c == null) {
+        saveError({
+          got: c,
+          token,
+          i: i,
+        });
+        return;
+      }
+
+      saveError({
+        got: c,
+        token,
+        i: i - 1,
       });
       return;
     };
