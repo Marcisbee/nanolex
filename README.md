@@ -25,7 +25,7 @@ npm install nanolex
 Here's an example of parsing a simple function call syntax like `SUM(1, SUM(2, 3))`:
 
 ```typescript
-import { createToken, EOF, getComposedTokens, nanolex } from "nanolex";
+import { createPattern, createToken, EOF, getComposedTokens, nanolex } from "nanolex";
 
 // Define tokens
 const Whitespace = createToken(/[ \t\n\r]+/, "Whitespace");
@@ -37,6 +37,11 @@ const Identifier = createToken(/\w+/, "Identifier");
 
 // Combine tokens
 const tokens = getComposedTokens([Whitespace, LParen, RParen, Comma, Integer, Identifier]);
+
+// Create patterns
+const $function = createPattern("function");
+const $params = createPattern("params");
+const $value = createPattern("value");
 
 // Define the parser
 export function parser(input: string) {
@@ -53,32 +58,26 @@ export function parser(input: string) {
   patternToSkip(consume(Whitespace));
 
   // Grammar rules
-  function FUNCTION() {
-    return and([
-      consume(Identifier),
-      consume(LParen),
-      PARAMS,
-      consume(RParen),
-    ], ([name, _lparen, params, _rparen]) => ({
-      type: "function",
-      name,
-      params,
-    }))();
-  }
+  $function.set = and([
+    consume(Identifier),
+    consume(LParen),
+    $params,
+    consume(RParen),
+  ], ([name, _lparen, params, _rparen]) => ({
+    type: "function",
+    name,
+    params,
+  }));
 
-  function PARAMS() {
-    return zeroOrManySep(VALUE, consume(Comma))();
-  }
+  $params.set = zeroOrManySep($value, consume(Comma));
 
-  function VALUE() {
-    return or([
-      consume(Integer, Number),
-      FUNCTION,
-    ])();
-  }
+  $value.set = or([
+    consume(Integer, Number),
+    $function,
+  ]);
 
   // Run parser
-  const [output] = throwIfError(and([FUNCTION, consume(EOF)]));
+  const [output] = throwIfError(and([$function, consume(EOF)]));
   return output;
 }
 
@@ -106,6 +105,7 @@ console.log(JSON.stringify(result, null, 2));
 ### Core Functions
 
 - **`createToken(pattern: string | RegExp, name?: string)`**: Defines a token for lexical analysis. Use a string for exact matches or a RegExp for patterns. The `name` parameter is optional and defaults to the pattern's source.
+- **`createPattern(name: string)`**: Creates a reusable grammar pattern that can be referenced by name and defined later using the `.set` property.
 - **`getComposedTokens(tokens: TokenLike[])`**: Combines tokens into a single regex for efficient parsing.
 - **`nanolex(input: string, tokens: ComposedTokens)`**: Initializes the parser with an input string and token set, returning parser utilities.
 - **`consume(token: TokenLike, transform?: (value: string) => any)`**: Consumes a token, optionally transforming its value.

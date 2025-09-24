@@ -218,7 +218,7 @@ export function nanolex(
     rule: GrammarLike,
     sep: GrammarLike,
     atLest: number,
-    transformer?: (value: any) => any,
+    transform?: (value: any) => any,
     until?: GrammarLike,
   ): GrammarLike {
     return (): any => {
@@ -264,8 +264,8 @@ export function nanolex(
         }
       }
 
-      if (transformer) {
-        return transformer(output);
+      if (innerError === undefined && transform) {
+        return transform(output);
       }
 
       return output;
@@ -615,7 +615,10 @@ interface GrammarLikeResponse<T = any> {
   response: T;
 }
 
-type GrammarLike<T = any> = () => GrammarLikeResponse<T>;
+interface GrammarLike<T = any> {
+  (): GrammarLikeResponse<T>;
+  set?: GrammarLike<T>;
+}
 
 interface TokenLike {
   token: string | RegExp;
@@ -630,4 +633,24 @@ export function getComposedTokens(tokens: TokenLike[]): ComposedTokens {
     id: composedTokenId++,
     tokensParse: new RegExp("(" + tokens.map((t) => t.source).join("|") + ")"),
   };
+}
+
+export function createPattern<T = any>(name: string) {
+  let pattern: any = () => {
+    throw new Error(`Pattern ${name} not defined`);
+  };
+  const out: GrammarLike<T | undefined> = () => pattern();
+
+  Object.defineProperty(out, "name", {
+    value: name,
+  });
+  Object.defineProperty(out, "set", {
+    configurable: true,
+    enumerable: true,
+    set(v: any) {
+      pattern = v;
+    },
+  });
+
+  return out;
 }
