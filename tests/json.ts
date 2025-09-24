@@ -1,5 +1,5 @@
-// deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars
 import {
+  createPattern,
   createToken,
   EOF,
   getComposedTokens,
@@ -26,7 +26,6 @@ const NumberLiteral = createToken(
 );
 
 const tokens = getComposedTokens([
-  Whitespace,
   StringLiteral,
   NumberLiteral,
   Comma,
@@ -40,6 +39,12 @@ const tokens = getComposedTokens([
   Null,
 ]);
 
+const $json = createPattern("json");
+const $object = createPattern<Record<string, any>>("object");
+const $objectItem = createPattern<[string, any]>("objectItem");
+const $array = createPattern<any[]>("array");
+const $value = createPattern<any>("value");
+
 export function parser(value: string) {
   const {
     consume,
@@ -52,72 +57,39 @@ export function parser(value: string) {
     throwIfError,
   } = nanolex(value, tokens);
 
-  patternToSkip(or([
-    consume(Whitespace),
-  ]));
+  patternToSkip(consume(Whitespace));
 
-  const cache: Record<string, any> = {};
+  $json.set = or([$object, $array]);
 
-  function Json() {
-    return (cache._z1 ||= or(cache._z2 ||= [OBJECT, ARRAY]))();
-  }
+  $object.set = and([
+    consume(LCurly),
+    zeroOrManySep($objectItem, consume(Comma)),
+    consume(RCurly),
+  ], ([_, params]) => Object.fromEntries(params || []));
 
-  function OBJECT() {
-    return (cache._a1 ||= and(
-      cache._a2 ||= [
-        consume(LCurly),
-        zeroOrManySep(OBJECT_ITEM, consume(Comma)),
-        consume(RCurly),
-      ],
-      transform,
-    ))();
+  $objectItem.set = and([
+    consume(StringLiteral, (value) => value.slice(1, -1)),
+    consume(Colon),
+    $value,
+  ], ([name, _, value]) => [name, value]);
 
-    function transform([_, params]: any) {
-      return Object.fromEntries(params || []);
-    }
-  }
+  $array.set = and([
+    consume(LSquare),
+    zeroOrManySep($value, consume(Comma)),
+    consume(RSquare),
+  ], ([_, items]) => items);
 
-  function OBJECT_ITEM() {
-    return (cache._b1 ||= and(
-      cache._b2 ||= [consume(StringLiteral, JSON.parse), consume(Colon), VALUE],
-      transform,
-    ))();
+  $value.set = or([
+    consume(StringLiteral, (value) => value.slice(1, -1)),
+    consume(NumberLiteral, Number),
+    $object,
+    $array,
+    consume(True, () => true),
+    consume(False, () => false),
+    consume(Null, () => null),
+  ]);
 
-    function transform([name, _, value]: any) {
-      return [name, value];
-    }
-  }
-
-  function ARRAY() {
-    return (cache._c1 ||= and(
-      cache._c2 ||= [
-        consume(LSquare),
-        zeroOrManySep(VALUE, consume(Comma)),
-        consume(RSquare),
-      ],
-      transform,
-    ))();
-
-    function transform([_, items]: any) {
-      return items;
-    }
-  }
-
-  function VALUE() {
-    return (cache._d1 ||= or(
-      cache._d2 ||= [
-        consume(StringLiteral, JSON.parse),
-        consume(NumberLiteral, Number),
-        OBJECT,
-        ARRAY,
-        consume(True, () => true),
-        consume(False, () => false),
-        consume(Null, () => null),
-      ],
-    ))();
-  }
-
-  const [output] = throwIfError(and([Json, consume(EOF)])) as any;
+  const [output] = throwIfError(and([$json, consume(EOF)]));
 
   return output;
 }
