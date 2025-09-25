@@ -700,7 +700,9 @@ export function getComposedTokens(tokens: TokenLike[]): ComposedTokens {
   };
 }
 
-export function createPattern<T = any>(name: string) {
+export function createPattern<T = any>(
+  name: string,
+): GrammarLike<T | undefined> {
   let pattern: any = () => {
     throw new Error(`Pattern ${name} not defined`);
   };
