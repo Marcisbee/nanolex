@@ -29,7 +29,7 @@ export function parser(value: string) {
     consume(Whitespace),
   ]));
 
-  function BinaryExpression() {
+  function BinaryExpression(): any {
     return and(
       [
         breakLoop(0, Expression),
@@ -49,7 +49,7 @@ export function parser(value: string) {
     }
   }
 
-  function Literal() {
+  function Literal(): any {
     return or([consume(Integer)], transform)();
 
     function transform(raw: any) {
@@ -60,7 +60,7 @@ export function parser(value: string) {
     }
   }
 
-  function Expression() {
+  function Expression(): any {
     return or([BinaryExpression, Literal])();
   }
 

@@ -500,11 +500,11 @@ export function parser(value: string) {
       consume(StringLiteral),
       zeroOrOne(and([consume(LParen), zeroOrOne(VALUE), consume(RParen)])),
     ],
-    ([_, double, name, [, value] = []]) => ({
+    ([_, double, name, value]) => ({
       type: "selector",
       scope: "pseudo",
       name,
-      value,
+      value: value?.[1],
       double: !!double,
     }),
   );

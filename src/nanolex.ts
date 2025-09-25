@@ -46,51 +46,104 @@ export function createToken(
 }
 
 export interface Nanolex {
-  consume: <Return = string>(
-    token: TokenLike,
-    transform?: ((value: string) => Return) | undefined,
-  ) => GrammarLike<(Return extends any ? string : Return) | undefined>;
-  consumeBehind: <Return = string>(
-    token: TokenLike,
-    transform?: ((value: string) => Return) | undefined,
-  ) => GrammarLike<(Return extends any ? string : Return) | undefined>;
-  consumeUntil: (token: TokenLike) => GrammarLike<any[]>;
+  consume: {
+    <Return>(
+      token: TokenLike,
+      transform: (value: string) => Return,
+    ): GrammarLike<Return | undefined>;
+    (token: TokenLike): GrammarLike<string | undefined>;
+  };
+  consumeBehind: {
+    <Return>(
+      token: TokenLike,
+      transform: (value: string) => Return,
+    ): GrammarLike<Return | undefined>;
+    (token: TokenLike): GrammarLike<string | undefined>;
+  };
+  consumeUntil: <Return = string[]>(
+    token: TokenLike | GrammarLike,
+    transform?: (value: string[]) => Return,
+  ) => GrammarLike<any[]>;
   peek: (rule: GrammarLike) => GrammarLike;
-  oneOrMany: (
-    rule: GrammarLike,
-    transformer?: ((value: any) => any) | undefined,
+  oneOrMany: <
+    T extends GrammarLike<any>,
+    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
+    OUT = R[],
+  >(
+    rule: T,
+    transformer?: ((value: R[]) => OUT) | undefined,
     until?: GrammarLike,
-  ) => GrammarLike<any>;
-  zeroOrMany: (
-    rule: GrammarLike,
-    transformer?: ((value: any) => any) | undefined,
+  ) => GrammarLike<OUT>;
+  zeroOrMany: <
+    T extends GrammarLike<any>,
+    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
+    OUT = R[],
+  >(
+    rule: T,
+    transformer?: ((value: R[]) => OUT) | undefined,
     until?: GrammarLike,
-  ) => GrammarLike<any>;
-  oneOrManySep: (
-    rule: GrammarLike,
+  ) => GrammarLike<OUT>;
+  oneOrManySep: <
+    T extends GrammarLike<any>,
+    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
+    OUT = R[],
+  >(
+    rule: T,
     sep: GrammarLike,
-    transformer?: ((value: any) => any) | undefined,
+    transformer?: ((value: R[]) => OUT) | undefined,
     until?: GrammarLike,
-  ) => GrammarLike<any>;
-  zeroOrManySep: (
-    rule: GrammarLike,
+  ) => GrammarLike<OUT>;
+  zeroOrManySep: <
+    T extends GrammarLike<any>,
+    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
+    OUT = R[],
+  >(
+    rule: T,
     sep: GrammarLike,
-    transformer?: ((value: any) => any) | undefined,
+    transformer?: ((value: R[]) => OUT) | undefined,
     until?: GrammarLike,
-  ) => GrammarLike<any>;
-  zeroOrOne: <T extends GrammarLike<any>>(rule: T) => GrammarLike;
-  not: (rule: GrammarLike) => GrammarLike;
-  and: <T extends GrammarLike<any>[]>(
-    rules: T,
-    transform?: ((value: any) => any) | undefined,
-  ) => GrammarLike;
-  or: <T extends GrammarLike<any>[]>(
-    rules: T,
-    transform?: ((value: any) => any) | undefined,
-  ) => GrammarLike;
+  ) => GrammarLike<OUT>;
+  zeroOrOne: <
+    T extends GrammarLike<any>,
+    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
+    OUT = R | void,
+  >(
+    rule: T,
+    transformer?: ((value?: R) => OUT) | undefined,
+  ) => GrammarLike<OUT>;
+  not: (rule: GrammarLike) => GrammarLike<undefined>;
+  and: <
+    T extends GrammarLike<any>[],
+    P extends Record<number, any> = {
+      [K in keyof T]: T[K] extends GrammarLike<infer R> ? Exclude<R, undefined>
+        : never;
+    },
+    OUT = P,
+  >(
+    rules: [...T],
+    transform?:
+      | ((
+        value: P,
+      ) => OUT)
+      | undefined,
+  ) => GrammarLike<OUT>;
+  or: <
+    T extends GrammarLike<any>[],
+    P extends Record<number, any> = {
+      [K in keyof T]: T[K] extends GrammarLike<infer R> ? Exclude<R, undefined>
+        : never;
+    },
+    V = P[number],
+    OUT = V,
+  >(
+    rules: [...T],
+    transform?: ((value: V) => OUT) | undefined,
+  ) => GrammarLike<OUT>;
   breakLoop: <T extends Function>(type: number, fn: T) => T;
   patternToSkip: (tokens: GrammarLike) => void;
-  throwIfError: <T extends GrammarLike<any>>(rule: T) => any;
+  throwIfError: <T extends GrammarLike<any>>(
+    rule: T,
+  ) => T extends GrammarLike<infer R> ? R : any;
   createError: (value: string) => void;
 }
 
