@@ -39,11 +39,11 @@ const tokens = getComposedTokens([
   Null,
 ]);
 
-const $json = createPattern("json");
-const $object = createPattern<Record<string, any>>("object");
-const $objectItem = createPattern<[string, any]>("objectItem");
-const $array = createPattern<any[]>("array");
-const $value = createPattern<any>("value");
+const LE_JSON = createPattern("json");
+const OBJECT = createPattern<Record<string, any>>("object");
+const OBJECT_ITEM = createPattern<[string, any]>("objectItem");
+const ARRAY = createPattern<any[]>("array");
+const VALUE = createPattern<any>("value");
 
 export function parser(value: string) {
   const {
@@ -59,37 +59,37 @@ export function parser(value: string) {
 
   patternToSkip(consume(Whitespace));
 
-  $json.set = or([$object, $array]);
+  LE_JSON.set = or([OBJECT, ARRAY]);
 
-  $object.set = and([
+  OBJECT.set = and([
     consume(LCurly),
-    zeroOrManySep($objectItem, consume(Comma)),
+    zeroOrManySep(OBJECT_ITEM, consume(Comma)),
     consume(RCurly),
   ], ([_, params]) => Object.fromEntries(params || []));
 
-  $objectItem.set = and([
+  OBJECT_ITEM.set = and([
     consume(StringLiteral, (value) => value.slice(1, -1)),
     consume(Colon),
-    $value,
+    VALUE,
   ], ([name, _, value]) => [name, value]);
 
-  $array.set = and([
+  ARRAY.set = and([
     consume(LSquare),
-    zeroOrManySep($value, consume(Comma)),
+    zeroOrManySep(VALUE, consume(Comma)),
     consume(RSquare),
   ], ([_, items]) => items);
 
-  $value.set = or([
+  VALUE.set = or([
     consume(StringLiteral, (value) => value.slice(1, -1)),
     consume(NumberLiteral, Number),
-    $object,
-    $array,
+    OBJECT,
+    ARRAY,
     consume(True, () => true),
     consume(False, () => false),
     consume(Null, () => null),
   ]);
 
-  const [output] = throwIfError(and([$json, consume(EOF)]));
+  const [output] = throwIfError(and([LE_JSON, consume(EOF)]));
 
   return output;
 }

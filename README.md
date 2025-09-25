@@ -39,9 +39,9 @@ const Identifier = createToken(/\w+/, "Identifier");
 const tokens = getComposedTokens([Whitespace, LParen, RParen, Comma, Integer, Identifier]);
 
 // Create patterns
-const $function = createPattern("function");
-const $params = createPattern("params");
-const $value = createPattern("value");
+const FUNCTION = createPattern("function");
+const PARAMS = createPattern("params");
+const VALUE = createPattern("value");
 
 // Define the parser
 export function parser(input: string) {
@@ -58,10 +58,10 @@ export function parser(input: string) {
   patternToSkip(consume(Whitespace));
 
   // Grammar rules
-  $function.set = and([
+  FUNCTION.set = and([
     consume(Identifier),
     consume(LParen),
-    $params,
+    PARAMS,
     consume(RParen),
   ], ([name, _lparen, params, _rparen]) => ({
     type: "function",
@@ -69,15 +69,15 @@ export function parser(input: string) {
     params,
   }));
 
-  $params.set = zeroOrManySep($value, consume(Comma));
+  PARAMS.set = zeroOrManySep(VALUE, consume(Comma));
 
-  $value.set = or([
+  VALUE.set = or([
     consume(Integer, Number),
-    $function,
+    FUNCTION,
   ]);
 
   // Run parser
-  const [output] = throwIfError(and([$function, consume(EOF)]));
+  const [output] = throwIfError(and([FUNCTION, consume(EOF)]));
   return output;
 }
 
