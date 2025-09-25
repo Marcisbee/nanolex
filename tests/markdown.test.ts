@@ -70,7 +70,7 @@ Deno.test(`parses "this_not_italic"`, () => {
   expect(parser("this_not_italic")).toEqual([
     {
       type: "p",
-      content: ["this","_","not","_","italic"],
+      content: ["this", "_", "not", "_", "italic"],
     },
   ]);
 });
@@ -79,7 +79,7 @@ Deno.test(`parses "this_not_italic_"`, () => {
   expect(parser("this_not_italic_")).toEqual([
     {
       type: "p",
-      content: ["this","_","not","_","italic","_"],
+      content: ["this", "_", "not", "_", "italic", "_"],
     },
   ]);
 });
@@ -88,7 +88,7 @@ Deno.test(`parses "_this_not_italic_"`, () => {
   expect(parser("_this_not_italic_")).toEqual([
     {
       type: "p",
-      content: ["_","this","_","not","_","italic","_"],
+      content: ["_", "this", "_", "not", "_", "italic", "_"],
     },
   ]);
 });
@@ -97,7 +97,7 @@ Deno.test(`parses "this _is_ italic"`, () => {
   expect(parser("this _is_ italic")).toEqual([
     {
       type: "p",
-      content: ["this"," ",{ type: "i", content: ["is"] }," ","italic"],
+      content: ["this", " ", { type: "i", content: ["is"] }, " ", "italic"],
     },
   ]);
 });
@@ -106,7 +106,7 @@ Deno.test(`parses "this __is__ bold"`, () => {
   expect(parser("this __is__ bold")).toEqual([
     {
       type: "p",
-      content: ["this"," ",{ type: "b", content: ["is"] }," ","bold"],
+      content: ["this", " ", { type: "b", content: ["is"] }, " ", "bold"],
     },
   ]);
 });
