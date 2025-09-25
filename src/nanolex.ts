@@ -385,13 +385,11 @@ export function nanolex(
       return resultRule;
     };
   }
-  // @TODO: handle consumeUntil(and(...))
   function consumeUntil<Return = string[]>(
-    token: TokenLike,
+    target: TokenLike | GrammarLike,
     transform?: (value: string[]) => Return,
   ): GrammarLike<any[]> {
     return (): any => {
-      // consumeTimes += 1;
       let c: string;
       const output: string[] = [];
 
@@ -401,31 +399,45 @@ export function nanolex(
           continue;
         }
 
-        if (token === EOF || !token.test(c)) {
+        // EOF sentinel means "gather everything"
+        if (target === EOF) {
           i += 1;
-
           output.push(c);
           continue;
         }
 
-        if (transform) {
-          return transform(output);
+        // Grammar (multi-token) sentinel: detect without consuming
+        if (typeof target === "function") {
+          const tempI = i;
+          const prevInner = innerError;
+          innerError = undefined;
+          (target as GrammarLike)();
+          const matched = innerError === undefined;
+          i = tempI;
+          innerError = prevInner;
+          if (matched) {
+            return transform ? transform(output) : output;
+          }
+        } else {
+          // Token sentinel: stop right before it (do not consume)
+          if (target.test(c)) {
+            return transform ? transform(output) : output;
+          }
         }
 
-        return output;
+        // Consume this chunk and continue scanning
+        i += 1;
+        output.push(c);
       }
 
-      if (EOF) {
-        if (transform) {
-          return transform(output);
-        }
-
-        return output;
+      if (target === EOF) {
+        return transform ? transform(output) : output;
       }
 
+      // Sentinel not found – register error (TokenLike only; GrammarLike has no single token ref)
       saveError({
         got: c,
-        token,
+        token: typeof target === "function" ? undefined : target,
         i,
       });
       return;
