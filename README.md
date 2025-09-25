@@ -89,7 +89,6 @@ export function parser(input: string) {
 
 // Example usage
 const result = parser("SUM(1, SUM(2, 3))");
-console.log(JSON.stringify(result, null, 2));
 /* Output:
 {
   "type": "function",
@@ -105,6 +104,7 @@ console.log(JSON.stringify(result, null, 2));
 }
 */
 ```
+[live demo](https://dune.land/dune/53ba2f1d-316e-4840-bc19-a65f2c75050c)
 
 ## Install
 
