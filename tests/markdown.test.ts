@@ -101,6 +101,15 @@ Deno.test(`parses "this _is_ italic"`, () => {
   ]);
 });
 
+Deno.test(`parses "this __is__ bold"`, () => {
+  expect(parser("this __is__ bold")).toEqual([
+    {
+      type: "p",
+      content: ["this"," ",{ type: "b", content: ["is"] }," ","bold"],
+    },
+  ]);
+});
+
 // Deno.test(`parses "foo\n> bar\n> baz\noof"`, () => {
 //   expect(parser("foo\n> bar\n> baz\noof")).toEqual([
 //     {

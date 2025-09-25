@@ -1,5 +1,6 @@
 // deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars ban-types
 import {
+  createPattern,
   createToken,
   EOF,
   getComposedTokens,
@@ -30,11 +31,26 @@ const tokens = getComposedTokens([
   Equal,
 ]);
 
+const PROGRAM = createPattern<any[]>("program");
+const BLOCK = createPattern<any>("block");
+const BLOCK_HEADING = createPattern<any>("blockHeading");
+const BLOCK_HEADING_WITH_UNDERLINE = createPattern<any>(
+  "blockHeadingWithUnderline",
+);
+const BLOCK_QUOTE = createPattern<any>("blockQuote");
+const TEXT = createPattern<any>("text");
+const INLINE_TEXT = createPattern<any>("inlineText");
+const BOLD = createPattern<any>("bold");
+const BOLD2 = createPattern<any>("bold2");
+const ITALIC = createPattern<any>("italic");
+const ITALIC2 = createPattern<any>("italic2");
+const INLINE_CODE = createPattern<any>("inlineCode");
+
 export function parser(value: string) {
   const {
     consume,
     consumeUntil,
-		consumeBehind,
+    consumeBehind,
     oneOrMany,
     oneOrManySep,
     zeroOrMany,
@@ -46,170 +62,154 @@ export function parser(value: string) {
     patternToSkip,
   } = nanolex(value, tokens);
 
-  function BlockHeading() {
-    return and(
-      [
-        oneOrMany(consume(Hash)),
-        oneOrMany(consume(Whitespace)),
-        oneOrMany(InlineText),
-      ],
-      ([hash, _, content]) => ({
-        type: "h",
-        size: hash.length,
-        content,
-      }),
-    )();
-  }
+  PROGRAM.set = zeroOrMany(
+    and([zeroOrMany(consume(NewLine)), BLOCK, zeroOrMany(consume(NewLine))]),
+    (a) => a.flat(2),
+  );
 
-  function BlockHeadingWithUnderline() {
-    return and(
-      [
-        oneOrMany(
-          InlineText,
-          undefined,
-          and([
-            consume(NewLine),
-            consume(Equal),
-            consume(Equal),
-            consume(Equal),
-          ]),
-        ),
-        and([consume(NewLine), consume(Equal), consume(Equal), consume(Equal)]),
-      ],
-      ([content]) => ({
-        type: "h",
-        size: 1,
-        content,
-      }),
-    )();
-  }
+  BLOCK.set = or([
+    BLOCK_QUOTE,
+    BLOCK_HEADING,
+    BLOCK_HEADING_WITH_UNDERLINE,
+    TEXT,
+  ]);
 
-  function BlockQuote() {
-    return and(
-      [
-        oneOrManySep(
-          // Simplified inner rule: just parse '> content'
-          and([consume(Gt), zeroOrMany(consume(Whitespace)), zeroOrMany(Block)], ([, content]) => content),
+  BLOCK_HEADING.set = and(
+    [
+      oneOrMany(consume(Hash)),
+      oneOrMany(consume(Whitespace)),
+      oneOrMany(INLINE_TEXT),
+    ],
+    ([hash, _, content]) => ({
+      type: "h",
+      size: hash.length,
+      content,
+    }),
+  );
+
+  BLOCK_HEADING_WITH_UNDERLINE.set = and(
+    [
+      oneOrMany(
+        INLINE_TEXT,
+        undefined,
+        and([
           consume(NewLine),
+          consume(Equal),
+          consume(Equal),
+          consume(Equal),
+        ]),
+      ),
+      and([consume(NewLine), consume(Equal), consume(Equal), consume(Equal)]),
+    ],
+    ([content]) => ({
+      type: "h",
+      size: 1,
+      content,
+    }),
+  );
+
+  BLOCK_QUOTE.set = and(
+    [
+      oneOrManySep(
+        // Simplified inner rule: just parse '> content'
+        and(
+          [consume(Gt), zeroOrMany(consume(Whitespace)), zeroOrMany(BLOCK)],
+          ([, content]) => content,
         ),
-      ] as const,
-      ([content]: [string[]]) => ({
-        type: "q",
-        content,
-      }),
-    )();
-  }
+        consume(NewLine),
+      ),
+    ] as const,
+    ([content]: [string[]]) => ({
+      type: "q",
+      content,
+    }),
+  );
 
-  function Block() {
-    return or([BlockQuote, BlockHeading, BlockHeadingWithUnderline, Text])();
-  }
+  TEXT.set = oneOrMany(
+    or([
+      INLINE_TEXT,
+      and([consume(NewLine), peek(not(consume(NewLine)))], () => "\n"),
+    ]),
+    (content) => ({
+      type: "p",
+      content,
+    }),
+  );
 
-  function Bold() {
-    return and(
-      [
-        consume(Star),
-        consume(Star),
-        oneOrMany(
-          or([Italic2, InlineCode, consume(Anything)]),
-          undefined,
-          and([consume(Star), consume(Star)]),
-        ),
-        consume(Star),
-        consume(Star),
-      ],
-      ([, , content]) => ({
-        type: "b",
-        content,
-      }),
-    )();
-  }
+  INLINE_TEXT.set = or([
+    BOLD,
+    BOLD2,
+    ITALIC,
+    ITALIC2,
+    INLINE_CODE,
+    consume(Anything),
+  ]);
 
-  function Bold2() {
-    return and(
-      [
-				not(peek(consumeBehind(Word))),
-        consume(Underscore),
-        consume(Underscore),
-        consumeUntil(Underscore),
-        consume(Underscore),
-        consume(Underscore),
-				not(peek(consume(Word))),
-      ],
-      ([, , , content]) => ({
-        type: "b",
-        content,
-      }),
-    )();
-  }
+  BOLD.set = and(
+    [
+      consume(Star),
+      consume(Star),
+      oneOrMany(
+        or([ITALIC2, INLINE_CODE, consume(Anything)]),
+        undefined,
+        and([consume(Star), consume(Star)]),
+      ),
+      consume(Star),
+      consume(Star),
+    ],
+    ([, , content]) => ({
+      type: "b",
+      content,
+    }),
+  );
 
-  function Italic() {
-    return and(
-      [consume(Star), consumeUntil(Star), consume(Star)],
-      ([, content]) => ({
-        type: "i",
-        content,
-      }),
-    )();
-  }
+  BOLD2.set = and(
+    [
+      not(peek(consumeBehind(Word))),
+      consume(Underscore),
+      consume(Underscore),
+      consumeUntil(and([consume(Underscore), consume(Underscore)])),
+      consume(Underscore),
+      consume(Underscore),
+      not(peek(consume(Word))),
+    ],
+    ([, , , content]) => ({
+      type: "b",
+      content,
+    }),
+  );
 
-  function Italic2() {
-    return and(
-      [
-				not(peek(consumeBehind(Word))),
-				consume(Underscore),
-				consumeUntil(Underscore),
-				consume(Underscore),
-				not(peek(consume(Word))),
-			],
-      ([, , content]) => ({
-        type: "i",
-        content,
-      }),
-    )();
-  }
+  ITALIC.set = and(
+    [consume(Star), consumeUntil(Star), consume(Star)],
+    ([, content]) => ({
+      type: "i",
+      content,
+    }),
+  );
 
-  function InlineCode() {
-    return and(
-      [consume(Tilde), consumeUntil(Tilde), consume(Tilde)],
-      ([, content]) => ({
-        type: "c",
-        content,
-      }),
-    )();
-  }
+  ITALIC2.set = and(
+    [
+      not(peek(consumeBehind(Word))),
+      consume(Underscore),
+      consumeUntil(Underscore),
+      consume(Underscore),
+      not(peek(consume(Word))),
+    ],
+    ([, , content]) => ({
+      type: "i",
+      content,
+    }),
+  );
 
-  function InlineText() {
-    return or([
-      Bold,
-      Bold2,
-      Italic,
-      Italic2,
-      InlineCode,
-      consume(Anything),
-    ])();
-  }
+  INLINE_CODE.set = and(
+    [consume(Tilde), consumeUntil(Tilde), consume(Tilde)],
+    ([, content]) => ({
+      type: "c",
+      content,
+    }),
+  );
 
-  function Text() {
-    return oneOrMany(
-      or([
-        InlineText,
-        and([consume(NewLine), peek(not(consume(NewLine)))], () => "\n"),
-      ]),
-      (content) => ({
-        type: "p",
-        content,
-      }),
-    )();
-  }
-
-  function Program() {
-    return zeroOrMany(
-      and([zeroOrMany(consume(NewLine)), Block, zeroOrMany(consume(NewLine))]),
-      (a) => a.flat(2),
-    )();
-  }
-
-  const [output] = throwIfError(and([Program, consume(EOF)]));
+  const [output] = throwIfError(and([PROGRAM, consume(EOF)]));
 
   return output;
 }
