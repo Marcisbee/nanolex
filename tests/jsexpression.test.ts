@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.215.0/assert/mod.ts";
 // import { assertSnapshot } from "testing/snapshot.ts";
 

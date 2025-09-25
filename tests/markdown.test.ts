@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-import-prefix no-unversioned-import
 import { expect } from "jsr:@std/expect";
 
 import { parser } from "./markdown.ts";
