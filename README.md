@@ -1,39 +1,23 @@
 # Nanolex 🪁
 
-Nanolex is a lightweight, TypeScript-first parser grammar builder designed for
-creating custom parsers with minimal overhead. It provides a flexible API to
-define tokens and grammar patterns, enabling developers to parse structured text
-into meaningful data structures efficiently. Ideal for parsing expressions,
-configuration files, or domain-specific languages.
+<a href="https://www.npmjs.com/package/nanolex">
+  <img alt="npm" src="https://img.shields.io/npm/v/nanolex.svg?style=flat-square" />
+</a>
+<a href="https://jsr.io/@marcisbee/nanolex">
+  <img alt="jsr" src="https://jsr.io/badges/@marcisbee/nanolex?style=flat-square" />
+</a>
+<a href="https://bundlephobia.com/result?p=nanolex">
+  <img alt="package size" src="https://img.shields.io/bundlephobia/minzip/nanolex?style=flat-square" />
+</a>
 
-## Features
+Lightweight TypeScript parser grammar builder for creating custom parsers.
 
-- **Token Definition**: Create tokens using strings or regular expressions for
-  precise lexical analysis.
-- **Grammar Combinators**: Build complex grammars with combinators like `and`,
-  `or`, `zeroOrMany`, `oneOrMany`, and more.
-- **Transformations**: Transform parsed results into custom data structures
-  using optional transform functions.
-- **Error Handling**: Detailed error reporting with `throwIfError` for robust
-  debugging.
-- **Skip Patterns**: Ignore irrelevant tokens (e.g., whitespace) during parsing.
-- **Type-Safe**: Fully typed for seamless integration with TypeScript projects.
-- **Lightweight**: Minimal dependencies and optimized for performance.
+- **Small.** Zero dependencies, minimal overhead.
+- **Type-safe.** Full TypeScript support with proper inference.
+- **Flexible.** Build complex grammars with simple combinators.
+- **Fast.** Optimized for performance with detailed error reporting.
 
-## Installation
-
-Install Nanolex via npm:
-
-```bash
-npm install nanolex
-```
-
-## Usage
-
-Here's an example of parsing a simple function call syntax like
-`SUM(1, SUM(2, 3))`:
-
-```typescript
+```ts
 import {
   createPattern,
   createToken,
@@ -122,75 +106,45 @@ console.log(JSON.stringify(result, null, 2));
 */
 ```
 
-## API Reference
+## Install
 
-### Core Functions
+```sh
+npm install nanolex
+```
 
-- **`createToken(pattern: string | RegExp, name?: string)`**: Defines a token
-  for lexical analysis. Use a string for exact matches or a RegExp for patterns.
-  The `name` parameter is optional and defaults to the pattern's source.
-- **`createPattern(name: string)`**: Creates a reusable grammar pattern that can
-  be referenced by name and defined later using the `.set` property.
-- **`getComposedTokens(tokens: TokenLike[])`**: Combines tokens into a single
-  regex for efficient parsing.
-- **`nanolex(input: string, tokens: ComposedTokens)`**: Initializes the parser
-  with an input string and token set, returning parser utilities.
-- **`consume(token: TokenLike, transform?: (value: string) => any)`**: Consumes
-  a token, optionally transforming its value.
-- **`consumeBehind(token: TokenLike, transform?: (value: string) => any)`**:
-  Consumes a token in reverse, useful for lookbehind patterns.
-- **`consumeUntil(token: TokenLike, transform?: (value: string[]) => any)`**:
-  Consumes tokens until a specified token is encountered.
-- **`peek(rule: GrammarLike)`**: Tests a rule without advancing the parser's
-  position.
-- **`and(rules: GrammarLike[], transform?: (value: any[]) => any)`**: Matches a
-  sequence of rules in order.
-- **`or(rules: GrammarLike[], transform?: (value: any) => any)`**: Matches any
-  one of the provided rules.
-- **`zeroOrMany(rule: GrammarLike, transform?: (value: any) => any, until?: GrammarLike)`**:
-  Matches zero or more occurrences of a rule.
-- **`oneOrMany(rule: GrammarLike, transform?: (value: any) => any, until?: GrammarLike)`**:
-  Matches one or more occurrences of a rule.
-- **`zeroOrManySep(rule: GrammarLike, sep: GrammarLike, transform?: (value: any) => any, until?: GrammarLike)`**:
-  Matches zero or more occurrences of a rule separated by a separator.
-- **`oneOrManySep(rule: GrammarLike, sep: GrammarLike, transform?: (value: any) => any, until?: GrammarLike)`**:
-  Matches one or more occurrences of a rule separated by a separator.
-- **`zeroOrOne(rule: GrammarLike, transform?: (value: any) => any)`**: Matches
-  zero or one occurrence of a rule.
-- **`not(rule: GrammarLike)`**: Succeeds if the rule fails, without consuming
-  input.
-- **`patternToSkip(rule: GrammarLike)`**: Marks a rule to be skipped during
-  parsing (e.g., whitespace).
-- **`throwIfError(rule: GrammarLike)`**: Executes a rule and throws a detailed
-  error if parsing fails.
-- **`breakLoop(type: number, fn: Function)`**: Prevents infinite loops in
-  recursive grammars by tracking rule execution.
+## Core API
 
-### Example Use Cases
+### `createToken(pattern, name?)`
 
-- **Mathematical Expressions**: Parse expressions like `2 + 3 * 4`.
-- **Configuration Files**: Parse custom formats like INI or YAML-like
-  structures.
-- **Domain-Specific Languages**: Create parsers for custom DSLs.
-- **Data Validation**: Validate and transform structured input.
+Define tokens for lexical analysis using strings or regex.
 
-## Contributing
+### `createPattern(name)`
 
-Contributions are welcome! To contribute:
+Create reusable grammar patterns that can reference each other.
 
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/your-feature`).
-3. Commit your changes (`git commit -m "Add your feature"`).
-4. Push to the branch (`git push origin feature/your-feature`).
-5. Open a Pull Request.
+### `nanolex(input, tokens)`
 
-Please include tests and follow the project's coding standards.
+Initialize parser with input string and token set.
 
-## License
+### Grammar Combinators
 
-Nanolex is licensed under the [MIT License](LICENSE).
+- `consume(token, transform?)` - Match and consume a token
+- `and(rules, transform?)` - Match sequence of rules
+- `or(rules, transform?)` - Match any one of the rules
+- `zeroOrMany(rule, transform?)` - Match zero or more occurrences
+- `oneOrMany(rule, transform?)` - Match one or more occurrences
+- `zeroOrManySep(rule, sep, transform?)` - Match with separator
+- `zeroOrOne(rule, transform?)` - Optional match
+- `patternToSkip(rule)` - Skip tokens (e.g., whitespace)
+- `throwIfError(rule)` - Execute rule and throw detailed errors
 
-## Acknowledgements
+## Use Cases
 
-Created by [Marcis](https://github.com/Marcisbee). Inspired by the need for a
-lightweight, TypeScript-friendly parsing library.
+- Mathematical expressions: `2 + 3 * (4 - 1)`
+- Configuration parsers: Custom DSL formats
+- Template engines: Variable interpolation syntax
+- Query languages: Custom search expressions
+
+# License
+
+[MIT](LICENSE) &copy; [Marcis](https://github.com/Marcisbee)
