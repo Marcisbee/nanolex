@@ -7,20 +7,34 @@ export type Token = {
 };
 
 /**
- * Grammar result union:
- * Success: [value, null]
- * Failure: [position, expectedToken]
+ * Result tuple for a Grammar:
+ *   Success: [value, null]
+ *   Failure: [position, expectedToken]
  */
-export type GrammarResult = [any, null] | [number, Token];
+export type GrammarResult<T> = [T, null] | [number, Token];
 
-type Grammar = (ctx: Context) => GrammarResult;
+/**
+ * Grammar is a function from parsing Context to GrammarResult<T>.
+ */
+export type Grammar<T> = (ctx: Context) => GrammarResult<T>;
 
+/**
+ * Parsing context shared across grammar invocations.
+ */
 interface Context {
   input: string;
   tokens: string[];
   pos: number;
-  skipRule: Grammar | null;
+  skipRule: Grammar<unknown> | null;
 }
+
+/** Utility: extract the value type from a Grammar */
+export type UnwrapGrammar<G> = G extends Grammar<infer V> ? V : never;
+
+/** Utility: tuple value types -> union */
+type UnionOf<R extends readonly Grammar<any>[]> = {
+  [K in keyof R]: UnwrapGrammar<R[K]>;
+}[number];
 
 /** Create a token definition */
 export function createToken(pattern: string | RegExp, name?: string): Token {
@@ -71,9 +85,23 @@ export const INFINITE_LOOP: Token = {
   test: () => false,
 };
 
-/** Sequence (AND) combinator */
-export const and =
-  (rules: Grammar[], transform?: (vs: any[]) => any): Grammar => (ctx) => {
+/**
+ * Sequence (AND) combinator.
+ * When no transform is provided the resulting value is a tuple whose
+ * element types correspond to each rule's produced value.
+ */
+export function and<R extends readonly Grammar<any>[]>(
+  rules: [...R],
+): Grammar<{ [K in keyof R]: UnwrapGrammar<R[K]> }>;
+export function and<R extends readonly Grammar<any>[], T>(
+  rules: [...R],
+  transform: (values: { [K in keyof R]: UnwrapGrammar<R[K]> }) => T,
+): Grammar<T>;
+export function and(
+  rules: readonly Grammar<any>[],
+  transform?: (values: any[]) => any,
+): Grammar<any> {
+  return (ctx) => {
     const startPos = ctx.pos;
     const values: any[] = [];
     for (const rule of rules) {
@@ -86,10 +114,21 @@ export const and =
     }
     return [transform ? transform(values) : values, null];
   };
+}
 
-/** Consume a specific token (forward) */
-export const consume =
-  (token: Token, transform?: (v: string) => any): Grammar => (ctx) => {
+/**
+ * Consume a specific token (forward).
+ */
+export function consume<T>(
+  token: Token,
+  transform: (v: string) => T,
+): Grammar<T>;
+export function consume(token: Token): Grammar<string>;
+export function consume(
+  token: Token,
+  transform?: (v: string) => unknown,
+): Grammar<any> {
+  return (ctx) => {
     let i = ctx.pos;
     const chunks = ctx.tokens;
     const chunksLength = chunks.length;
@@ -111,13 +150,11 @@ export const consume =
 
       const currI = i;
       if (ctx.skipRule) {
-        // Temporarily disable skipRule reentrancy while running it
         const startPos = ctx.pos;
         const skipRule = ctx.skipRule;
         ctx.skipRule = null;
-        const [_, skipErrToken] = skipRule(ctx);
+        const [, skipErrToken] = skipRule(ctx);
         ctx.skipRule = skipRule;
-        // If skip succeeded and consumed something, continue scanning
         if (skipErrToken === null && ctx.pos > startPos) {
           i = ctx.pos;
           continue;
@@ -134,14 +171,22 @@ export const consume =
 
     return [i, token];
   };
+}
 
 /**
  * Consume a specific token looking behind current position (backwards).
- * If token matches the previous non-empty chunk, position is moved one
- * step back; otherwise failure is reported.
+ * On success moves one position back.
  */
-export const consumeBehind =
-  (token: Token, transform?: (v: string) => any): Grammar => (ctx) => {
+export function consumeBehind<T>(
+  token: Token,
+  transform: (v: string) => T,
+): Grammar<T>;
+export function consumeBehind(token: Token): Grammar<string>;
+export function consumeBehind(
+  token: Token,
+  transform?: (v: string) => unknown,
+): Grammar<any> {
+  return (ctx) => {
     let i = ctx.pos;
     const chunks = ctx.tokens;
     let c: string | undefined;
@@ -167,6 +212,7 @@ export const consumeBehind =
 
     return [Math.max(0, i - 1), token];
   };
+}
 
 /**
  * Consume and collect raw string chunks until a sentinel token or rule
@@ -177,10 +223,17 @@ export const consumeBehind =
  * - If sentinel is a Token, success when that token matches; failure
  *   when EOF is reached before that token is found.
  */
-export const consumeUntil = (
-  target: Token | Grammar,
-  transform?: (vs: string[]) => any,
-): Grammar => {
+export function consumeUntil<T>(
+  target: Token | Grammar<any>,
+  transform: (vs: string[]) => T,
+): Grammar<T>;
+export function consumeUntil(
+  target: Token | Grammar<any>,
+): Grammar<string[]>;
+export function consumeUntil(
+  target: Token | Grammar<any>,
+  transform?: (vs: string[]) => unknown,
+): Grammar<any> {
   const isGrammar = typeof target === "function";
   return (ctx) => {
     const startPos = ctx.pos;
@@ -197,7 +250,6 @@ export const consumeUntil = (
         continue;
       }
 
-      // EOF sentinel: gather all
       if (!isGrammar && target === EOF) {
         out.push(c);
         i += 1;
@@ -206,45 +258,53 @@ export const consumeUntil = (
 
       if (isGrammar) {
         const savePos = ctx.pos;
-        const res = (target as Grammar)(ctx);
+        const res = (target as Grammar<any>)(ctx);
         const matched = res[1] === null;
-        ctx.pos = savePos; // restore (lookahead)
+        ctx.pos = savePos;
         if (matched) {
           ctx.pos = i;
           return [transform ? transform(out) : out, null];
         }
       } else {
-        // Token sentinel
         if ((target as Token).test(c)) {
           ctx.pos = i;
           return [transform ? transform(out) : out, null];
         }
       }
 
-      // Consume this chunk
       out.push(c);
       i += 1;
       ctx.pos = i;
     }
 
-    // If EOF sentinel, success
     if (!isGrammar && target === EOF) {
       return [transform ? transform(out) : out, null];
     }
 
-    // Failed to find token sentinel
     if (!isGrammar) {
       return [ctx.pos, target as Token];
     }
 
-    // Grammar sentinel not found - generic failure
     return [startPos, UNEXPECTED];
   };
-};
+}
 
-/** OR combinator */
-export const or =
-  (rules: Grammar[], transform?: (v: any) => any): Grammar => (ctx) => {
+/**
+ * OR combinator.
+ * Produces a union of the rule value types (or transform output).
+ */
+export function or<R extends readonly Grammar<any>[]>(
+  rules: [...R],
+): Grammar<UnionOf<R>>;
+export function or<R extends readonly Grammar<any>[], T>(
+  rules: [...R],
+  transform: (value: UnionOf<R>) => T,
+): Grammar<T>;
+export function or(
+  rules: readonly Grammar<any>[],
+  transform?: (value: any) => any,
+): Grammar<any> {
+  return (ctx) => {
     const startPos = ctx.pos;
     let lastError: [number, Token] | null = null;
     for (const rule of rules) {
@@ -257,93 +317,147 @@ export const or =
     }
     return lastError || [startPos, EOF];
   };
+}
 
-/** zeroOrMany combinator */
-export const zeroOrMany = (
-  rule: Grammar,
-  transform?: (vs: any[]) => any,
-  until?: Grammar,
-): Grammar =>
-(ctx) => {
-  const values: any[] = [];
-  while (true) {
-    // Early stop before attempting next element
-    if (until) {
-      const save = ctx.pos;
-      const u = until(ctx);
-      ctx.pos = save;
-      if (u[1] === null) break;
-    }
-    const startPos = ctx.pos;
-    const res = rule(ctx);
-    if (res[1] !== null) {
-      ctx.pos = startPos;
-      break;
-    }
-    values.push(res[0]);
-    if (ctx.pos === startPos) {
-      return [ctx.pos, INFINITE_LOOP];
-    }
-  }
-  return [transform ? transform(values) : values, null];
-};
-
-/** zeroOrMany with separator */
-export const zeroOrManySep = (
-  rule: Grammar,
-  sep: Grammar,
-  transform?: (vs: any[]) => any,
-  until?: Grammar,
-): Grammar =>
-(ctx) => {
-  const values: any[] = [];
-  let first = true;
-  while (true) {
-    // Early stop check
-    if (!first && until) {
-      const save = ctx.pos;
-      const u = until(ctx);
-      ctx.pos = save;
-      if (u[1] === null) break;
-    }
-    const startPos = ctx.pos;
-    if (!first) {
-      const sepRes = sep(ctx);
-      if (sepRes[1] !== null) {
+/**
+ * zeroOrMany combinator.
+ */
+export function zeroOrMany<V, T>(
+  rule: Grammar<V>,
+  transform: (vs: V[]) => T,
+  until?: Grammar<any>,
+): Grammar<T>;
+export function zeroOrMany<V>(
+  rule: Grammar<V>,
+  transform?: undefined,
+  until?: Grammar<any>,
+): Grammar<V[]>;
+export function zeroOrMany(
+  rule: Grammar<any>,
+  transform?: (vs: any[]) => unknown,
+  until?: Grammar<any>,
+): Grammar<any> {
+  return (ctx) => {
+    const values: any[] = [];
+    while (true) {
+      if (until) {
+        const save = ctx.pos;
+        const u = until(ctx);
+        ctx.pos = save;
+        if (u[1] === null) break;
+      }
+      const startPos = ctx.pos;
+      const res = rule(ctx);
+      if (res[1] !== null) {
+        ctx.pos = startPos;
         break;
       }
+      values.push(res[0]);
+      if (ctx.pos === startPos) {
+        return [ctx.pos, INFINITE_LOOP];
+      }
     }
-    const res = rule(ctx);
-    if (res[1] !== null) {
-      if (!first) ctx.pos = startPos;
-      break;
-    }
-    values.push(res[0]);
-    first = false;
-  }
-  return [transform ? transform(values) : values, null];
-};
+    return [transform ? transform(values) : values, null];
+  };
+}
 
-/** oneOrMany */
-export const oneOrMany = (
-  rule: Grammar,
-  transform?: (vs: any[]) => any,
-  until?: Grammar,
-): Grammar =>
-  and(
+/**
+ * zeroOrMany with separator.
+ */
+export function zeroOrManySep<V, T>(
+  rule: Grammar<V>,
+  sep: Grammar<any>,
+  transform: (vs: V[]) => T,
+  until?: Grammar<any>,
+): Grammar<T>;
+export function zeroOrManySep<V>(
+  rule: Grammar<V>,
+  sep: Grammar<any>,
+  transform?: undefined,
+  until?: Grammar<any>,
+): Grammar<V[]>;
+export function zeroOrManySep(
+  rule: Grammar<any>,
+  sep: Grammar<any>,
+  transform?: (vs: any[]) => unknown,
+  until?: Grammar<any>,
+): Grammar<any> {
+  return (ctx) => {
+    const values: any[] = [];
+    let first = true;
+    while (true) {
+      if (!first && until) {
+        const save = ctx.pos;
+        const u = until(ctx);
+        ctx.pos = save;
+        if (u[1] === null) break;
+      }
+      const startPos = ctx.pos;
+      if (!first) {
+        const sepRes = sep(ctx);
+        if (sepRes[1] !== null) {
+          break;
+        }
+      }
+      const res = rule(ctx);
+      if (res[1] !== null) {
+        if (!first) ctx.pos = startPos;
+        break;
+      }
+      values.push(res[0]);
+      first = false;
+    }
+    return [transform ? transform(values) : values, null];
+  };
+}
+
+/**
+ * oneOrMany combinator.
+ */
+export function oneOrMany<V, T>(
+  rule: Grammar<V>,
+  transform: (vs: V[]) => T,
+  until?: Grammar<any>,
+): Grammar<T>;
+export function oneOrMany<V>(
+  rule: Grammar<V>,
+  transform?: undefined,
+  until?: Grammar<any>,
+): Grammar<V[]>;
+export function oneOrMany(
+  rule: Grammar<any>,
+  transform?: (vs: any[]) => unknown,
+  until?: Grammar<any>,
+): Grammar<any> {
+  return and(
     [rule, zeroOrMany(rule, undefined, until)],
     ([first, rest]) =>
-      transform ? transform([first, ...rest]) : [first, ...rest],
+      (transform ? transform([first, ...rest]) : [first, ...rest]) as any,
   );
+}
 
-/** oneOrMany with separator */
-export const oneOrManySep = (
-  rule: Grammar,
-  sep: Grammar,
-  transform?: (vs: any[]) => any,
-  until?: Grammar,
-): Grammar =>
-  and(
+/**
+ * oneOrMany with separator.
+ */
+export function oneOrManySep<V, T>(
+  rule: Grammar<V>,
+  sep: Grammar<any>,
+  transform: (vs: V[]) => T,
+  until?: Grammar<any>,
+): Grammar<T>;
+export function oneOrManySep<V>(
+  rule: Grammar<V>,
+  sep: Grammar<any>,
+  transform?: undefined,
+  until?: Grammar<any>,
+): Grammar<V[]>;
+export function oneOrManySep(
+  rule: Grammar<any>,
+  sep: Grammar<any>,
+  transform?: (vs: any[]) => unknown,
+  until?: Grammar<any>,
+): Grammar<any> {
+  return and(
     [
       rule,
       zeroOrMany(
@@ -353,12 +467,26 @@ export const oneOrManySep = (
       ),
     ],
     ([first, rest]) =>
-      transform ? transform([first, ...rest]) : [first, ...rest],
+      (transform ? transform([first, ...rest]) : [first, ...rest]) as any,
   );
+}
 
-/** zeroOrOne */
-export const zeroOrOne =
-  (rule: Grammar, transform?: (v: any) => any): Grammar => (ctx) => {
+/**
+ * zeroOrOne combinator.
+ */
+export function zeroOrOne<V, T>(
+  rule: Grammar<V>,
+  transform: (v: V | undefined) => T,
+): Grammar<T>;
+export function zeroOrOne<V>(
+  rule: Grammar<V>,
+  transform?: undefined,
+): Grammar<V | undefined>;
+export function zeroOrOne(
+  rule: Grammar<any>,
+  transform?: (v: any) => unknown,
+): Grammar<any> {
+  return (ctx) => {
     const startPos = ctx.pos;
     const res = rule(ctx);
     if (res[1] === null) {
@@ -367,38 +495,56 @@ export const zeroOrOne =
     ctx.pos = startPos;
     return [transform ? transform(undefined) : undefined, null];
   };
+}
 
-/** Peek (lookahead) */
-export const peek = (rule: Grammar): Grammar => (ctx) => {
-  const startPos = ctx.pos;
-  const res = rule(ctx);
-  ctx.pos = startPos;
-  return res;
-};
+/**
+ * Peek (lookahead) - value is preserved, position is restored.
+ */
+export function peek<V>(rule: Grammar<V>): Grammar<V> {
+  return (ctx) => {
+    const startPos = ctx.pos;
+    const res = rule(ctx);
+    ctx.pos = startPos;
+    return res;
+  };
+}
 
-/** Negative lookahead */
-export const not = (rule: Grammar): Grammar => (ctx) => {
-  const res = peek(rule)(ctx);
-  if (res[1] === null) {
-    return [ctx.pos, UNEXPECTED];
-  }
-  return [null, null];
-};
+/**
+ * Negative lookahead. Succeeds when inner rule fails.
+ * Always produces null as its value.
+ */
+export function not(rule: Grammar<any>): Grammar<null> {
+  return (ctx) => {
+    const res = peek(rule)(ctx);
+    if (res[1] === null) {
+      return [ctx.pos, UNEXPECTED];
+    }
+    return [null, null];
+  };
+}
 
-/** Apply a temporary skip rule inside another rule */
-export const skipIn =
-  (skip: Grammar | null, rule: Grammar): Grammar => (ctx) => {
+/**
+ * Apply a temporary skip rule inside another rule.
+ */
+export function skipIn<V>(
+  skip: Grammar<any> | null,
+  rule: Grammar<V>,
+): Grammar<V> {
+  return (ctx) => {
     const originalSkip = ctx.skipRule;
     ctx.skipRule = skip;
     const result = rule(ctx);
     ctx.skipRule = originalSkip;
     return result;
   };
+}
 
-/** Wrap a raw rule accessor (for potential lazy evaluation) */
-export const rule = (r: () => Grammar): Grammar => {
+/**
+ * Wrap a raw rule accessor (for potential lazy evaluation).
+ */
+export function rule<V>(r: () => Grammar<V>): Grammar<V> {
   return (ctx) => (r as any).cached(ctx);
-};
+}
 
 /**
  * Produce a code lens / pointer excerpt for error reporting.
@@ -436,22 +582,24 @@ function getCodeLens(chunks: string[], i: number) {
  *
  * Optionally pass a skip pattern factory as third argument.
  */
-export function createParser<T extends Record<string, () => Grammar>>(
+export function createParser<T extends Record<string, () => Grammar<any>>>(
   tokens: Token[],
   rawRules: T,
-  skipFactory?: () => Grammar,
-): (key: keyof T, input: string) => any {
+  skipFactory?: () => Grammar<any>,
+): <K extends keyof T>(
+  key: K,
+  input: string,
+) => UnwrapGrammar<ReturnType<T[K]>> {
   const tokenRegex = new RegExp(
     "(" + tokens.map((t) => t.source).join("|") + ")",
   );
 
-  // Materialize rule implementations once (store under .cached)
   for (const key in rawRules) {
     (rawRules[key] as any).cached = rawRules[key]();
   }
 
   const cache: Record<string, string[]> = {};
-  let fullRule!: Grammar;
+  const fullRules: Partial<Record<keyof T, Grammar<any>>> = {};
   const skipRule = skipFactory ? skipFactory() : null;
 
   return (key, input) => {
@@ -462,10 +610,14 @@ export function createParser<T extends Record<string, () => Grammar>>(
       pos: 0,
       skipRule,
     };
-    fullRule ??= and(
-      [rule(rawRules[key]), consume(EOF)],
-      ([v]) => v,
-    );
+
+    let fullRule = fullRules[key];
+    if (!fullRule) {
+      const base = rule(rawRules[key]) as ReturnType<T[typeof key]>;
+      fullRule = and([base, consume(EOF)], ([v]) => v);
+      fullRules[key] = fullRule;
+    }
+
     const res = fullRule(ctx);
     if (res[1] !== null) {
       const [pos, expectedToken] = res as [number, Token];
