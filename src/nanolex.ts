@@ -46,20 +46,16 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
   // Precompile an anchored full-match regex for RegExp tokens
   const fullRegex = isString ? null : new RegExp(`^${source}$`);
 
-  const cache = new Map<string, boolean>();
+  const cache: Record<string, boolean> = {};
   return {
     pattern,
     source,
     name: name || source,
-    test(value: string): boolean {
-      if (isString) {
-        return value === pattern;
-      }
-      let v: boolean;
-      return cache.has(value)
-        ? cache.get(value)!
-        : ((v = (fullRegex as RegExp).test(value)), cache.set(value, v), v);
-    },
+    test: isString
+      ? (value: string): boolean => value === pattern
+      : (value: string): boolean => {
+        return cache[value] ??= (fullRegex as RegExp).test(value);
+      },
   };
 }
 
@@ -129,42 +125,40 @@ export function consume(
   transform?: (v: string) => unknown,
 ): Grammar<any> {
   return (ctx) => {
-    let i = ctx.pos;
     const chunks = ctx.tokens;
-    const chunksLength = chunks.length;
-    let c: string | undefined;
+    let i = ctx.pos;
+    const n = chunks.length;
 
-    while (i < chunksLength) {
-      c = chunks[i];
+    while (i < n) {
+      const c = chunks[i];
 
       if (!c) {
-        i += 1;
+        i++;
         continue;
       }
 
-      if (token !== EOF && token.test(c)) {
-        i += 1;
-        ctx.pos = i;
+      if (token.test(c)) {
+        ctx.pos = i + 1;
         return [transform ? transform(c) : c, null];
       }
 
-      const currI = i;
       if (ctx.skipRule) {
-        const startPos = ctx.pos;
-        const skipRule = ctx.skipRule;
+        const saved = ctx.pos;
+        const sr = ctx.skipRule;
         ctx.skipRule = null;
-        const [, skipErrToken] = skipRule(ctx);
-        ctx.skipRule = skipRule;
-        if (skipErrToken === null && ctx.pos > startPos) {
+        const [, err] = sr(ctx);
+        ctx.skipRule = sr;
+        if (err === null && ctx.pos > saved) {
           i = ctx.pos;
           continue;
         }
-        ctx.pos = currI;
+        ctx.pos = saved;
       }
+
       break;
     }
 
-    if (token === EOF && i >= chunksLength) {
+    if (token === EOF && i >= n) {
       ctx.pos = i;
       return [transform ? transform("") : "", null];
     }
@@ -477,7 +471,7 @@ export function oneOrManySep(
 export function zeroOrOne<V, T>(
   rule: Grammar<V>,
   transform: (v: V | undefined) => T,
-): Grammar<T>;
+): Grammar<T | undefined>;
 export function zeroOrOne<V>(
   rule: Grammar<V>,
   transform?: undefined,
@@ -493,7 +487,7 @@ export function zeroOrOne(
       return [transform ? transform(res[0]) : res[0], null];
     }
     ctx.pos = startPos;
-    return [transform ? transform(undefined) : undefined, null];
+    return [undefined, null];
   };
 }
 
@@ -515,7 +509,7 @@ export function peek<V>(rule: Grammar<V>): Grammar<V> {
  */
 export function not(rule: Grammar<any>): Grammar<null> {
   return (ctx) => {
-    const res = peek(rule)(ctx);
+    const res = rule(ctx);
     if (res[1] === null) {
       return [ctx.pos, UNEXPECTED];
     }
@@ -531,36 +525,19 @@ export function skipIn<V>(
   rule: Grammar<V>,
 ): Grammar<V> {
   return (ctx) => {
-    const originalSkip = ctx.skipRule;
+    const prevSkip = ctx.skipRule;
     ctx.skipRule = skip;
-    const result = rule(ctx);
+    const res = rule(ctx);
 
-    // When the inner rule succeeds, eagerly consume any trailing skip tokens.
-    // This ensures patterns like `{expr }` (whitespace before a delimiter) work,
-    // since otherwise the trailing whitespace token would remain and break the
-    // caller which expects the next significant token (e.g. a closing brace).
-    if (result[1] === null && skip) {
-      while (true) {
-        const before = ctx.pos;
-        const saved = ctx.skipRule;
-        ctx.skipRule = null; // disable nested skip attempts inside the skip rule itself
-        const [, errTok] = skip(ctx);
-        ctx.skipRule = saved;
-
-        if (errTok !== null) {
-          // Skip rule failed here; restore position and stop.
-          ctx.pos = before;
-          break;
-        }
-        if (ctx.pos === before) {
-          // Defensive: prevent infinite loop if skip rule consumed nothing.
-          break;
-        }
-      }
+    // If pattern "{", SKIP, "}" is used, ensure we skip until we find "}"
+    if (skip) {
+      ctx.skipRule = null;
+      skip(ctx);
+      ctx.skipRule = skip;
     }
 
-    ctx.skipRule = originalSkip;
-    return result;
+    ctx.skipRule = prevSkip;
+    return res;
   };
 }
 
@@ -633,7 +610,7 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
 
   // Precompute & cache concrete Grammar instances on each rule function
   for (const key in rawRules) {
-    (rawRules[key] as any).cached = rawRules[key]();
+    (rawRules[key] as any).cached ??= rawRules[key]();
   }
 
   const cache: Record<string, string[]> = {};
