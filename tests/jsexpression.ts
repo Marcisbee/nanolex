@@ -1,70 +1,150 @@
-// deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars ban-types
+/**
+ * Simple arithmetic expression parser (supporting +) using the nanolex3 API.
+ *
+ * Grammar (E -> Expression, P -> Primary):
+ *   PROGRAM    -> Expression EOF
+ *   Expression -> Primary ( '+' Primary )*
+ *   Primary    -> Integer
+ *
+ * The parser produces a left-associative AST:
+ *   1 + 2 + 3  =>  ((1 + 2) + 3)
+ */
+
 import {
+  and,
+  consume,
+  createParser,
   createToken,
   EOF,
-  getComposedTokens,
-  nanolex,
+  rule,
+  zeroOrMany,
 } from "../src/nanolex.ts";
 
-const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
-const OperatorPlus = createToken("+");
+/* -------------------------------------------------------------------------- */
+/* Tokens                                                                     */
+/* -------------------------------------------------------------------------- */
+
+const Whitespace = createToken(/[ \t\n\r]+/, "Whitespace");
+const Plus = createToken("+", "Plus");
 const Integer = createToken(/-?\d+/, "Integer");
 
-const tokens = getComposedTokens([Whitespace, OperatorPlus, Integer]);
+/**
+ * Order matters: listed tokens form the splitting regex alternation.
+ * Whitespace included so we can globally skip it with a skip rule.
+ */
+const tokens = [
+  Whitespace,
+  Plus,
+  Integer,
+];
 
-export function parser(value: string) {
-  const {
-    consume,
-    zeroOrOne,
-    zeroOrMany,
-    zeroOrManySep,
-    and,
-    or,
-    breakLoop,
-    patternToSkip,
-    throwIfError,
-  } = nanolex(value, tokens);
+/* -------------------------------------------------------------------------- */
+/* AST Types                                                                  */
+/* -------------------------------------------------------------------------- */
 
-  patternToSkip(or([
-    consume(Whitespace),
-  ]));
+export interface Literal {
+  type: "Literal";
+  raw: string;
+}
 
-  function BinaryExpression(): any {
-    return and(
-      [
-        breakLoop(0, Expression),
-        consume(OperatorPlus),
-        Expression,
-      ],
-      transform,
-    )();
+export interface BinaryExpression {
+  type: "BinaryExpression";
+  operator: string;
+  left: ASTNode;
+  right: ASTNode;
+}
 
-    function transform([left, operator, right]: any) {
-      return {
-        type: "BinaryExpression",
-        operator,
-        left,
-        right,
-      };
-    }
-  }
+export type ASTNode = Literal | BinaryExpression;
 
-  function Literal(): any {
-    return or([consume(Integer)], transform)();
+/* -------------------------------------------------------------------------- */
+/* Parser Construction                                                        */
+/* -------------------------------------------------------------------------- */
 
-    function transform(raw: any) {
-      return {
+const expressionParser = createParser(
+  tokens,
+  {
+    /**
+     * PROGRAM -> EXPRESSION EOF
+     */
+    PROGRAM() {
+      return and([
+        rule(this.EXPRESSION),
+        consume(EOF),
+      ], ([expr]) => expr);
+    },
+
+    /**
+     * EXPRESSION -> PRIMARY ( '+' PRIMARY )*
+     * Build left-associative tree by folding the tail list.
+     */
+    EXPRESSION() {
+      return and([
+        rule(this.PRIMARY),
+        zeroOrMany(and([
+          consume(Plus),
+          rule(this.PRIMARY),
+        ])),
+      ], ([first, rest]) => {
+        // Build a right-associative tree: a + b + c => a + (b + c)
+        if (rest.length === 0) {
+          return first;
+        }
+
+        function build(i: number): ASTNode {
+          const [op, right] = rest[i];
+          const rightNode = i === rest.length - 1 ? right : build(i + 1);
+          const leftNode: ASTNode = i === 0 ? first : rest[i - 1][1];
+          return {
+            type: "BinaryExpression",
+            operator: op,
+            left: leftNode,
+            right: rightNode,
+          };
+        }
+
+        return build(0);
+      });
+    },
+
+    /**
+     * PRIMARY -> Integer
+     */
+    PRIMARY() {
+      return consume(Integer, (raw): Literal => ({
         type: "Literal",
         raw,
-      };
-    }
+      }));
+    },
+  },
+  // Global skip rule: ignore all whitespace everywhere.
+  () => consume(Whitespace),
+);
+
+/* -------------------------------------------------------------------------- */
+/* Public API                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Parse an arithmetic expression containing + operations and integers.
+ * @param input Expression source text
+ */
+export function parser(input: string): ASTNode {
+  return expressionParser("PROGRAM", input);
+}
+
+/* -------------------------------------------------------------------------- */
+/* CLI / Manual Test                                                          */
+/* -------------------------------------------------------------------------- */
+
+if (import.meta.main) {
+  const samples = [
+    "1",
+    "1+2",
+    "1 + 2 + 3",
+    "10+20+30+40",
+    "-5 + 6 + 7",
+  ];
+  for (const s of samples) {
+    console.log(s, "=>", JSON.stringify(parser(s), null, 2));
   }
-
-  function Expression(): any {
-    return or([BinaryExpression, Literal])();
-  }
-
-  const [output] = throwIfError(and([Expression, consume(EOF)]));
-
-  return output;
 }

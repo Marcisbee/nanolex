@@ -1,11 +1,20 @@
-// deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars ban-types
+/**
+ * JSON parser implemented with the nanolex3 combinator API.
+ * Supports objects, arrays, strings, numbers, booleans, and null.
+ */
 import {
-  createPattern,
+  and,
+  consume,
+  createParser,
   createToken,
   EOF,
-  getComposedTokens,
-  nanolex,
+  or,
+  rule,
+  skipIn,
+  zeroOrManySep,
 } from "../src/nanolex.ts";
+
+/* -------------------------------- Tokens -------------------------------- */
 
 const Whitespace = createToken(/[ \t\n\r]+/, "WhiteSpace");
 const True = createToken("true");
@@ -26,7 +35,10 @@ const NumberLiteral = createToken(
   "NumberLiteral",
 );
 
-const tokens = getComposedTokens([
+/**
+ * Order matters for token splitting (earlier tokens have priority).
+ */
+const tokens = [
   StringLiteral,
   NumberLiteral,
   Comma,
@@ -38,59 +50,90 @@ const tokens = getComposedTokens([
   True,
   False,
   Null,
-]);
+];
 
-const LE_JSON = createPattern("json");
-const OBJECT = createPattern<Record<string, any>>("object");
-const OBJECT_ITEM = createPattern<[string, any]>("objectItem");
-const ARRAY = createPattern<any[]>("array");
-const VALUE = createPattern<any>("value");
+/* ------------------------------- Grammar ---------------------------------- */
+/**
+ * createParser returns a function we can invoke with any rule name + input.
+ * We pass a global skip factory to automatically skip whitespace everywhere.
+ */
+const jsonParser = createParser(
+  tokens,
+  {
+    JSON() {
+      return or([
+        rule(this.OBJECT),
+        rule(this.ARRAY),
+      ]);
+    },
 
-export function parser(value: string) {
-  const {
-    consume,
-    zeroOrOne,
-    zeroOrMany,
-    zeroOrManySep,
-    and,
-    or,
-    patternToSkip,
-    throwIfError,
-  } = nanolex(value, tokens);
+    OBJECT() {
+      return and([
+        consume(LCurly),
+        zeroOrManySep(rule(this.OBJECT_ITEM), consume(Comma)),
+        consume(RCurly),
+      ], ([_l, entries]) => {
+        return Object.fromEntries(entries || []);
+      });
+    },
 
-  patternToSkip(consume(Whitespace));
+    OBJECT_ITEM() {
+      return and([
+        consume(StringLiteral, (v) => v.slice(1, -1)),
+        consume(Colon),
+        rule(this.VALUE),
+      ], ([key, _c, value]) => [key, value] as [string, any]);
+    },
 
-  LE_JSON.set = or([OBJECT, ARRAY]);
+    ARRAY() {
+      return and([
+        consume(LSquare),
+        zeroOrManySep(rule(this.VALUE), consume(Comma)),
+        consume(RSquare),
+      ], ([_l, items]) => items);
+    },
 
-  OBJECT.set = and([
-    consume(LCurly),
-    zeroOrManySep(OBJECT_ITEM, consume(Comma)),
-    consume(RCurly),
-  ], ([_, params]) => Object.fromEntries(params || []));
+    VALUE() {
+      return or([
+        consume(StringLiteral, (v) => v.slice(1, -1)),
+        consume(NumberLiteral, Number),
+        rule(this.OBJECT),
+        rule(this.ARRAY),
+        consume(True, () => true),
+        consume(False, () => false),
+        consume(Null, () => null),
+      ]);
+    },
 
-  OBJECT_ITEM.set = and([
-    consume(StringLiteral, (value) => value.slice(1, -1)),
-    consume(Colon),
-    VALUE,
-  ], ([name, _, value]) => [name, value]);
+    PROGRAM() {
+      // Apply whitespace skipping only within the top-level rule
+      return skipIn(consume(Whitespace), rule(this.JSON));
+    },
+  },
+  // Optionally, we could pass a global skip with: () => consume(Whitespace)
+);
 
-  ARRAY.set = and([
-    consume(LSquare),
-    zeroOrManySep(VALUE, consume(Comma)),
-    consume(RSquare),
-  ], ([_, items]) => items);
+/* ------------------------------ Public API -------------------------------- */
 
-  VALUE.set = or([
-    consume(StringLiteral, (value) => value.slice(1, -1)),
-    consume(NumberLiteral, Number),
-    OBJECT,
-    ARRAY,
-    consume(True, () => true),
-    consume(False, () => false),
-    consume(Null, () => null),
-  ]);
+/**
+ * Parse a JSON string into a native JS value.
+ * @param value JSON text
+ */
+export function parseJson(value: string): any {
+  return jsonParser("PROGRAM", value);
+}
 
-  const [output] = throwIfError(and([LE_JSON, consume(EOF)]));
+/**
+ * Backwards-compatible exported name (optional).
+ */
+export const parser = parseJson;
 
-  return output;
+/* ------------------------------- CLI Demo --------------------------------- */
+if (import.meta.main) {
+  const sample = `{
+    "name": "Example",
+    "nums": [1, 2, 3],
+    "nested": { "ok": true, "n": null, "v": -12.5e2 }
+  }`;
+  console.log(parseJson(sample));
 }

@@ -1,25 +1,62 @@
-// deno-lint-ignore-file ban-unused-ignore no-explicit-any no-unused-vars ban-types
+/**
+ * Markdown (subset) parser migrated to nanolex3 API.
+ * Supported:
+ *  - ATX headings: #, ##, ### ...
+ *  - Setext heading (single level with === underline)
+ *  - Block quotes ( > ... )
+ *  - Paragraph text blocks
+ *  - Bold **text** or __text__
+ *  - Italic *text* or _text_
+ *  - Inline code `code`
+ */
+
 import {
-  createPattern,
+  and,
+  consume,
+  consumeBehind,
+  consumeUntil,
+  createParser,
   createToken,
   EOF,
-  getComposedTokens,
-  nanolex,
+  not,
+  oneOrMany,
+  oneOrManySep,
+  or,
+  peek,
+  rule,
+  zeroOrMany,
+  zeroOrOne,
 } from "../src/nanolex.ts";
 
-const Whitespace = createToken(/[ \t]+/);
-const NewLine = createToken(/[\n\r]/);
-const Anything = createToken(/.*/);
-const Hash = createToken("#");
-const Star = createToken("*");
-const Underscore = createToken("_");
-const Tilde = createToken("`");
-const Lt = createToken("<");
-const Gt = createToken(">");
-const Equal = createToken("=");
-const Word = createToken(/[a-zA-Z0-9]+/);
+/* -------------------------------------------------------------------------- */
+/* Tokens                                                                     */
+/* -------------------------------------------------------------------------- */
 
-const tokens = getComposedTokens([
+const Whitespace = createToken(/[ \t]+/, "Whitespace");
+const NewLine = createToken(/[\n\r]/, "NewLine");
+const Hash = createToken("#", "Hash");
+const Star = createToken("*", "Star");
+const Underscore = createToken("_", "Underscore");
+const Tilde = createToken("`", "Backtick");
+const Lt = createToken("<", "Lt");
+const Gt = createToken(">", "Gt");
+const Equal = createToken("=", "Equal");
+
+/**
+ * Helper tokens only used via consume() (not part of splitting):
+ *  - Anything: greedy fallback for inline text segments
+ *  - Word: alphanumeric word boundary checks used in emphasis rules
+ *
+ * They are NOT included in the token splitting array on purpose.
+ */
+const Anything = createToken(/.*/u, "Anything");
+const Word = createToken(/[a-zA-Z0-9]+/, "Word");
+
+/**
+ * Order of tokens matters. We exclude Anything / Word so normal text is
+ * produced as raw chunks between recognized delimiters.
+ */
+const tokens = [
   Whitespace,
   NewLine,
   Hash,
@@ -29,187 +66,213 @@ const tokens = getComposedTokens([
   Lt,
   Gt,
   Equal,
-]);
+];
 
-const PROGRAM = createPattern<any[]>("program");
-const BLOCK = createPattern<any>("block");
-const BLOCK_HEADING = createPattern<any>("blockHeading");
-const BLOCK_HEADING_WITH_UNDERLINE = createPattern<any>(
-  "blockHeadingWithUnderline",
-);
-const BLOCK_QUOTE = createPattern<any>("blockQuote");
-const TEXT = createPattern<any>("text");
-const INLINE_TEXT = createPattern<any>("inlineText");
-const BOLD = createPattern<any>("bold");
-const BOLD2 = createPattern<any>("bold2");
-const ITALIC = createPattern<any>("italic");
-const ITALIC2 = createPattern<any>("italic2");
-const INLINE_CODE = createPattern<any>("inlineCode");
+/* -------------------------------------------------------------------------- */
+/* Parser                                                                     */
+/* -------------------------------------------------------------------------- */
 
-export function parser(value: string) {
-  const {
-    consume,
-    consumeUntil,
-    consumeBehind,
-    oneOrMany,
-    oneOrManySep,
-    zeroOrMany,
-    and,
-    or,
-    peek,
-    not,
-    throwIfError,
-    patternToSkip,
-  } = nanolex(value, tokens);
-
-  PROGRAM.set = zeroOrMany(
-    and([zeroOrMany(consume(NewLine)), BLOCK, zeroOrMany(consume(NewLine))]),
-    (a) => a.flat(2),
-  );
-
-  BLOCK.set = or([
-    BLOCK_QUOTE,
-    BLOCK_HEADING,
-    BLOCK_HEADING_WITH_UNDERLINE,
-    TEXT,
-  ]);
-
-  BLOCK_HEADING.set = and(
-    [
-      oneOrMany(consume(Hash)),
-      oneOrMany(consume(Whitespace)),
-      oneOrMany(INLINE_TEXT),
-    ],
-    ([hash, _, content]) => ({
-      type: "h",
-      size: hash.length,
-      content,
-    }),
-  );
-
-  BLOCK_HEADING_WITH_UNDERLINE.set = and(
-    [
-      oneOrMany(
-        INLINE_TEXT,
-        undefined,
+const mdParser = createParser(
+  tokens,
+  {
+    PROGRAM() {
+      return zeroOrMany(
         and([
-          consume(NewLine),
-          consume(Equal),
-          consume(Equal),
-          consume(Equal),
+          zeroOrMany(consume(NewLine)),
+          rule(this.BLOCK),
+          zeroOrMany(consume(NewLine)),
         ]),
-      ),
-      and([consume(NewLine), consume(Equal), consume(Equal), consume(Equal)]),
-    ],
-    ([content]) => ({
-      type: "h",
-      size: 1,
-      content,
-    }),
-  );
+        (arr) => arr.flat(2),
+      );
+    },
 
-  BLOCK_QUOTE.set = and(
-    [
-      oneOrManySep(
-        // Simplified inner rule: just parse '> content'
-        and(
-          [consume(Gt), zeroOrMany(consume(Whitespace)), zeroOrMany(BLOCK)],
-          ([, content]) => content,
-        ),
+    BLOCK() {
+      return or([
+        rule(this.BLOCK_QUOTE),
+        rule(this.BLOCK_HEADING_WITH_UNDERLINE),
+        rule(this.BLOCK_HEADING),
+        rule(this.TEXT),
+      ]);
+    },
+
+    BLOCK_HEADING() {
+      return and([
+        oneOrMany(consume(Hash)),
+        oneOrMany(consume(Whitespace)),
+        oneOrMany(rule(this.INLINE_TEXT)),
+      ], ([hashes, _ws, content]) => ({
+        type: "h",
+        size: hashes.length,
+        content,
+      }));
+    },
+
+    BLOCK_HEADING_WITH_UNDERLINE() {
+      // Collect inline content until newline + === underline
+      const underline = and([
         consume(NewLine),
-      ),
-    ] as const,
-    ([content]: [string[]]) => ({
-      type: "q",
-      content,
-    }),
-  );
+        consume(Equal),
+        consume(Equal),
+        consume(Equal),
+      ]);
 
-  TEXT.set = oneOrMany(
-    or([
-      INLINE_TEXT,
-      and([consume(NewLine), peek(not(consume(NewLine)))], () => "\n"),
-    ]),
-    (content) => ({
-      type: "p",
-      content,
-    }),
-  );
+      return and([
+        oneOrMany(
+          rule(this.INLINE_TEXT),
+          undefined,
+          underline,
+        ),
+        underline,
+      ], ([content]) => ({
+        type: "h",
+        size: 1,
+        content,
+      }));
+    },
 
-  INLINE_TEXT.set = or([
-    BOLD,
-    BOLD2,
-    ITALIC,
-    ITALIC2,
-    INLINE_CODE,
-    consume(Anything),
-  ]);
+    BLOCK_QUOTE() {
+      // > line (newline > line)*
+      return and([
+        oneOrManySep(
+          and([
+            consume(Gt),
+            zeroOrMany(consume(Whitespace)),
+            zeroOrMany(rule(this.BLOCK)),
+          ], ([, , content]) => content),
+          consume(NewLine),
+        ),
+      ], ([content]) => ({
+        type: "q",
+        content,
+      }));
+    },
 
-  BOLD.set = and(
-    [
-      consume(Star),
-      consume(Star),
-      oneOrMany(
-        or([ITALIC2, INLINE_CODE, consume(Anything)]),
-        undefined,
-        and([consume(Star), consume(Star)]),
-      ),
-      consume(Star),
-      consume(Star),
-    ],
-    ([, , content]) => ({
-      type: "b",
-      content,
-    }),
-  );
+    TEXT() {
+      return oneOrMany(
+        or([
+          rule(this.INLINE_TEXT),
+          // Preserve single newlines inside paragraph
+          and([consume(NewLine), peek(not(consume(NewLine)))], () => "\n"),
+        ]),
+        (content) => ({
+          type: "p",
+          content,
+        }),
+      );
+    },
 
-  BOLD2.set = and(
-    [
-      not(peek(consumeBehind(Word))),
-      consume(Underscore),
-      consume(Underscore),
-      consumeUntil(and([consume(Underscore), consume(Underscore)])),
-      consume(Underscore),
-      consume(Underscore),
-      not(peek(consume(Word))),
-    ],
-    ([, , , content]) => ({
-      type: "b",
-      content,
-    }),
-  );
+    INLINE_TEXT() {
+      return or([
+        rule(this.BOLD),
+        rule(this.BOLD2),
+        rule(this.ITALIC),
+        rule(this.ITALIC2),
+        rule(this.INLINE_CODE),
+        consume(Anything),
+      ]);
+    },
 
-  ITALIC.set = and(
-    [consume(Star), consumeUntil(Star), consume(Star)],
-    ([, content]) => ({
-      type: "i",
-      content,
-    }),
-  );
+    // **bold**
+    BOLD() {
+      const endSentinel = and([consume(Star), consume(Star)]);
+      return and([
+        consume(Star),
+        consume(Star),
+        zeroOrMany(
+          and([
+            not(peek(endSentinel)),
+            or([
+              rule(this.ITALIC2),
+              rule(this.INLINE_CODE),
+              consume(Anything),
+            ]),
+          ], ([, v]) => v),
+        ),
+        consume(Star),
+        consume(Star),
+      ], ([, , content]) => ({
+        type: "b",
+        content,
+      }));
+    },
 
-  ITALIC2.set = and(
-    [
-      not(peek(consumeBehind(Word))),
-      consume(Underscore),
-      consumeUntil(Underscore),
-      consume(Underscore),
-      not(peek(consume(Word))),
-    ],
-    ([, , content]) => ({
-      type: "i",
-      content,
-    }),
-  );
+    // __bold__
+    BOLD2() {
+      const sentinel = and([consume(Underscore), consume(Underscore)]);
+      return and([
+        not(peek(consumeBehind(Word))),
+        consume(Underscore),
+        consume(Underscore),
+        consumeUntil(sentinel),
+        consume(Underscore),
+        consume(Underscore),
+        not(peek(consume(Word))),
+      ], ([, , , content]) => ({
+        type: "b",
+        content,
+      }));
+    },
 
-  INLINE_CODE.set = and(
-    [consume(Tilde), consumeUntil(Tilde), consume(Tilde)],
-    ([, content]) => ({
-      type: "c",
-      content,
-    }),
-  );
+    // *italic*
+    ITALIC() {
+      return and([
+        consume(Star),
+        consumeUntil(Star),
+        consume(Star),
+      ], ([, content]) => ({
+        type: "i",
+        content,
+      }));
+    },
 
-  const [output] = throwIfError(and([PROGRAM, consume(EOF)]));
+    // _italic_
+    ITALIC2() {
+      return and([
+        not(peek(consumeBehind(Word))),
+        consume(Underscore),
+        consumeUntil(Underscore),
+        consume(Underscore),
+        not(peek(consume(Word))),
+      ], ([, , content]) => ({
+        type: "i",
+        content,
+      }));
+    },
 
-  return output;
+    // `code`
+    INLINE_CODE() {
+      return and([
+        consume(Tilde),
+        consumeUntil(Tilde),
+        consume(Tilde),
+      ], ([, content]) => ({
+        type: "c",
+        content,
+      }));
+    },
+
+    PROGRAM_EOF() {
+      return and([
+        rule(this.PROGRAM),
+        consume(EOF),
+      ], ([program]) => program);
+    },
+  },
+);
+
+/* -------------------------------------------------------------------------- */
+/* Public API                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Parse markdown subset into an AST.
+ */
+export function parser(input: string): any {
+  return mdParser("PROGRAM_EOF", input);
+}
+
+if (import.meta.main) {
+  const sample =
+    `# Heading\n\nParagraph *italic* and **bold** and \`code\`.\n\n> Quote line 1\n> Quote line 2`;
+  console.log(JSON.stringify(parser(sample), null, 2));
 }
