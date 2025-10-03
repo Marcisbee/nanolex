@@ -256,7 +256,11 @@ export const or =
 
 /** zeroOrMany combinator */
 export const zeroOrMany =
-  (rule: Grammar, transform?: (vs: any[]) => any): Grammar => (ctx) => {
+  (
+    rule: Grammar,
+    transform?: (vs: any[]) => any,
+    until?: Grammar,
+  ): Grammar => (ctx) => {
     const values: any[] = [];
     while (true) {
       const startPos = ctx.pos;
@@ -266,6 +270,18 @@ export const zeroOrMany =
         break;
       }
       values.push(res[0]);
+
+      // Optional early termination if until matches (lookahead)
+      if (until) {
+        const savePos = ctx.pos;
+        const uRes = until(ctx);
+        const matched = uRes[1] === null;
+        ctx.pos = savePos;
+        if (matched) {
+          break;
+        }
+      }
+
       if (ctx.pos === startPos) {
         return [ctx.pos, INFINITE_LOOP];
       }
@@ -275,7 +291,12 @@ export const zeroOrMany =
 
 /** zeroOrMany with separator */
 export const zeroOrManySep =
-  (rule: Grammar, sep: Grammar, transform?: (vs: any[]) => any): Grammar =>
+  (
+    rule: Grammar,
+    sep: Grammar,
+    transform?: (vs: any[]) => any,
+    until?: Grammar,
+  ): Grammar =>
   (ctx) => {
     const values: any[] = [];
     let first = true;
@@ -294,6 +315,16 @@ export const zeroOrManySep =
       }
       values.push(res[0]);
       first = false;
+
+      if (until) {
+        const savePos = ctx.pos;
+        const uRes = until(ctx);
+        const matched = uRes[1] === null;
+        ctx.pos = savePos;
+        if (matched) {
+          break;
+        }
+      }
     }
     return [transform ? transform(values) : values, null];
   };
@@ -302,9 +333,10 @@ export const zeroOrManySep =
 export const oneOrMany = (
   rule: Grammar,
   transform?: (vs: any[]) => any,
+  until?: Grammar,
 ): Grammar =>
   and(
-    [rule, zeroOrMany(rule)],
+    [rule, zeroOrMany(rule, undefined, until)],
     ([first, rest]) =>
       transform ? transform([first, ...rest]) : [first, ...rest],
   );
@@ -314,9 +346,17 @@ export const oneOrManySep = (
   rule: Grammar,
   sep: Grammar,
   transform?: (vs: any[]) => any,
+  until?: Grammar,
 ): Grammar =>
   and(
-    [rule, zeroOrMany(and([sep, rule]), (seps) => seps.map((s) => s[1]))],
+    [
+      rule,
+      zeroOrMany(
+        and([sep, rule]),
+        (seps) => seps.map((s) => s[1]),
+        until,
+      ),
+    ],
     ([first, rest]) =>
       transform ? transform([first, ...rest]) : [first, ...rest],
   );
