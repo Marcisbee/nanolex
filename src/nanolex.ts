@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any
 export type Token = {
   pattern: string | RegExp;
   name: string;
@@ -439,7 +440,7 @@ export function createParser<T extends Record<string, () => Grammar>>(
   tokens: Token[],
   rawRules: T,
   skipFactory?: () => Grammar,
-) {
+): (key: keyof T, input: string) => any {
   const tokenRegex = new RegExp(
     "(" + tokens.map((t) => t.source).join("|") + ")",
   );
@@ -453,7 +454,7 @@ export function createParser<T extends Record<string, () => Grammar>>(
   let fullRule!: Grammar;
   const skipRule = skipFactory ? skipFactory() : null;
 
-  return (key: keyof T, input: string) => {
+  return (key, input) => {
     const tokensArr = (cache[input] ??= input.split(tokenRegex));
     const ctx: Context = {
       input,

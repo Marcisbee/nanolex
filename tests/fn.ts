@@ -3,7 +3,6 @@ import {
   consume,
   createParser,
   createToken,
-  EOF,
   or,
   rule,
   skipIn,

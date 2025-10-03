@@ -25,7 +25,6 @@ import {
   or,
   peek,
   rule,
-  skipIn,
   zeroOrMany,
   zeroOrManySep,
   zeroOrOne,
@@ -554,7 +553,7 @@ const cssParser = createParser(
 /* Public API                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export function parseCss(source: string): any {
+export function parseCss(source: string) {
   return cssParser("PROGRAM_EOF", source);
 }
 

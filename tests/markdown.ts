@@ -1,3 +1,4 @@
+// deno-lint-ignore-file
 /**
  * Markdown (subset) parser migrated to nanolex3 API.
  * Supported:
@@ -25,7 +26,6 @@ import {
   peek,
   rule,
   zeroOrMany,
-  zeroOrOne,
 } from "../src/nanolex.ts";
 
 /* -------------------------------------------------------------------------- */
@@ -267,7 +267,7 @@ const mdParser = createParser(
 /**
  * Parse markdown subset into an AST.
  */
-export function parser(input: string): any {
+export function parser(input: string) {
   return mdParser("PROGRAM_EOF", input);
 }
 

@@ -1,3 +1,4 @@
+// deno-lint-ignore-file
 /**
  * JSON parser implemented with the nanolex3 combinator API.
  * Supports objects, arrays, strings, numbers, booleans, and null.
@@ -7,7 +8,6 @@ import {
   consume,
   createParser,
   createToken,
-  EOF,
   or,
   rule,
   skipIn,
@@ -119,7 +119,7 @@ const jsonParser = createParser(
  * Parse a JSON string into a native JS value.
  * @param value JSON text
  */
-export function parseJson(value: string): any {
+export function parseJson(value: string) {
   return jsonParser("PROGRAM", value);
 }
 
