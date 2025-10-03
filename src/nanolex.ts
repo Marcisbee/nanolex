@@ -28,6 +28,9 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
     ? pattern.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
     : pattern.source;
 
+  // Precompile an anchored full-match regex for RegExp tokens
+  const fullRegex = isString ? null : new RegExp(`^${source}$`);
+
   const cache = new Map<string, boolean>();
   return {
     pattern,
@@ -40,7 +43,7 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
       let v: boolean;
       return cache.has(value)
         ? cache.get(value)!
-        : ((v = (pattern as RegExp).test(value)), cache.set(value, v), v);
+        : ((v = (fullRegex as RegExp).test(value)), cache.set(value, v), v);
     },
   };
 }
@@ -255,79 +258,70 @@ export const or =
   };
 
 /** zeroOrMany combinator */
-export const zeroOrMany =
-  (
-    rule: Grammar,
-    transform?: (vs: any[]) => any,
-    until?: Grammar,
-  ): Grammar => (ctx) => {
-    const values: any[] = [];
-    while (true) {
-      const startPos = ctx.pos;
-      const res = rule(ctx);
-      if (res[1] !== null) {
-        ctx.pos = startPos;
-        break;
-      }
-      values.push(res[0]);
-
-      // Optional early termination if until matches (lookahead)
-      if (until) {
-        const savePos = ctx.pos;
-        const uRes = until(ctx);
-        const matched = uRes[1] === null;
-        ctx.pos = savePos;
-        if (matched) {
-          break;
-        }
-      }
-
-      if (ctx.pos === startPos) {
-        return [ctx.pos, INFINITE_LOOP];
-      }
+export const zeroOrMany = (
+  rule: Grammar,
+  transform?: (vs: any[]) => any,
+  until?: Grammar,
+): Grammar =>
+(ctx) => {
+  const values: any[] = [];
+  while (true) {
+    // Early stop before attempting next element
+    if (until) {
+      const save = ctx.pos;
+      const u = until(ctx);
+      ctx.pos = save;
+      if (u[1] === null) break;
     }
-    return [transform ? transform(values) : values, null];
-  };
+    const startPos = ctx.pos;
+    const res = rule(ctx);
+    if (res[1] !== null) {
+      ctx.pos = startPos;
+      break;
+    }
+    values.push(res[0]);
+    if (ctx.pos === startPos) {
+      return [ctx.pos, INFINITE_LOOP];
+    }
+  }
+  return [transform ? transform(values) : values, null];
+};
 
 /** zeroOrMany with separator */
-export const zeroOrManySep =
-  (
-    rule: Grammar,
-    sep: Grammar,
-    transform?: (vs: any[]) => any,
-    until?: Grammar,
-  ): Grammar =>
-  (ctx) => {
-    const values: any[] = [];
-    let first = true;
-    while (true) {
-      const startPos = ctx.pos;
-      if (!first) {
-        const sepRes = sep(ctx);
-        if (sepRes[1] !== null) {
-          break;
-        }
-      }
-      const res = rule(ctx);
-      if (res[1] !== null) {
-        if (!first) ctx.pos = startPos;
+export const zeroOrManySep = (
+  rule: Grammar,
+  sep: Grammar,
+  transform?: (vs: any[]) => any,
+  until?: Grammar,
+): Grammar =>
+(ctx) => {
+  const values: any[] = [];
+  let first = true;
+  while (true) {
+    // Early stop check
+    if (!first && until) {
+      const save = ctx.pos;
+      const u = until(ctx);
+      ctx.pos = save;
+      if (u[1] === null) break;
+    }
+    const startPos = ctx.pos;
+    if (!first) {
+      const sepRes = sep(ctx);
+      if (sepRes[1] !== null) {
         break;
       }
-      values.push(res[0]);
-      first = false;
-
-      if (until) {
-        const savePos = ctx.pos;
-        const uRes = until(ctx);
-        const matched = uRes[1] === null;
-        ctx.pos = savePos;
-        if (matched) {
-          break;
-        }
-      }
     }
-    return [transform ? transform(values) : values, null];
-  };
+    const res = rule(ctx);
+    if (res[1] !== null) {
+      if (!first) ctx.pos = startPos;
+      break;
+    }
+    values.push(res[0]);
+    first = false;
+  }
+  return [transform ? transform(values) : values, null];
+};
 
 /** oneOrMany */
 export const oneOrMany = (
@@ -370,7 +364,7 @@ export const zeroOrOne =
       return [transform ? transform(res[0]) : res[0], null];
     }
     ctx.pos = startPos;
-    return [transform ? transform(null) : null, null];
+    return [transform ? transform(undefined) : undefined, null];
   };
 
 /** Peek (lookahead) */
