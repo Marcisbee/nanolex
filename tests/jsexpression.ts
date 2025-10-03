@@ -1,15 +1,3 @@
-/**
- * Simple arithmetic expression parser (supporting +) using the nanolex3 API.
- *
- * Grammar (E -> Expression, P -> Primary):
- *   PROGRAM    -> Expression EOF
- *   Expression -> Primary ( '+' Primary )*
- *   Primary    -> Integer
- *
- * The parser produces a left-associative AST:
- *   1 + 2 + 3  =>  ((1 + 2) + 3)
- */
-
 import {
   and,
   consume,

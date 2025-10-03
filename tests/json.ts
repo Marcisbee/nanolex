@@ -1,13 +1,10 @@
 // deno-lint-ignore-file
-/**
- * JSON parser implemented with the nanolex3 combinator API.
- * Supports objects, arrays, strings, numbers, booleans, and null.
- */
 import {
   and,
   consume,
   createParser,
   createToken,
+  Grammar,
   or,
   rule,
   skipIn,
@@ -93,7 +90,7 @@ const jsonParser = createParser(
       ], ([_l, items]) => items);
     },
 
-    VALUE() {
+    VALUE(): Grammar<any> {
       return or([
         consume(StringLiteral, (v) => v.slice(1, -1)),
         consume(NumberLiteral, Number),

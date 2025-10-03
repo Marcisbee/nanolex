@@ -1,18 +1,4 @@
-/**
- * CSS (subset) parser migrated to nanolex3 API.
- *
- * Supported features:
- *  - Rulesets: selector { declarations }
- *  - @keyframes with percentage & from/to frames
- *  - @media queries with basic conditions & features
- *  - Selectors: tag, .class, #id, *, attribute selectors, pseudo selectors
- *  - Combinators: + > ~ (descendant via whitespace), column (|| simulated using '||')
- *  - Values: numbers (+ optional units), hex colors, time units, strings, functions, variables (--var)
- *  - Important flag: !important
- *
- * Note: This is a pragmatic subset; not a full CSS specification implementation.
- */
-
+// deno-lint-ignore-file no-explicit-any
 import {
   and,
   consume,
@@ -20,6 +6,7 @@ import {
   createParser,
   createToken,
   EOF,
+  type Grammar,
   not,
   oneOrManySep,
   or,
@@ -300,7 +287,7 @@ const cssParser = createParser(
     },
 
     /* --------------------------------- Value -------------------------------- */
-    VALUE() {
+    VALUE(): Grammar<any> {
       return oneOrManySep(
         or([
           rule(this.VARIABLE),
@@ -357,7 +344,7 @@ const cssParser = createParser(
       }));
     },
 
-    VARIABLE() {
+    VARIABLE(): Grammar<any> {
       return and([
         consume(Minus),
         consume(Minus),
@@ -384,7 +371,7 @@ const cssParser = createParser(
       return oneOrManySep(rule(this.SELECTOR_SEPARATOR), consume(Comma));
     },
 
-    SELECTOR_SEPARATOR() {
+    SELECTOR_SEPARATOR(): Grammar<any> {
       return and([
         rule(this.SELECTOR_COMBINATOR),
         zeroOrOne(and([
@@ -401,7 +388,7 @@ const cssParser = createParser(
       });
     },
 
-    SELECTOR_COMBINATOR() {
+    SELECTOR_COMBINATOR(): Grammar<any> {
       return and([
         rule(this.SELECTOR_CHAIN),
         zeroOrOne(and([

@@ -1,8 +1,10 @@
+// deno-lint-ignore-file no-explicit-any
 import {
   and,
   consume,
   createParser,
   createToken,
+  type Grammar,
   or,
   rule,
   skipIn,
@@ -30,7 +32,11 @@ const tokens = [
 const jsonParser = createParser(
   tokens,
   {
-    FUNCTION() {
+    FUNCTION(): Grammar<{
+      type: "function";
+      name: string;
+      params: (number | { type: "function"; name: string; params: any[] })[];
+    }> {
       return and([
         consume(Identifier),
         consume(LParen),

@@ -1,16 +1,4 @@
 // deno-lint-ignore-file
-/**
- * Markdown (subset) parser migrated to nanolex3 API.
- * Supported:
- *  - ATX headings: #, ##, ### ...
- *  - Setext heading (single level with === underline)
- *  - Block quotes ( > ... )
- *  - Paragraph text blocks
- *  - Bold **text** or __text__
- *  - Italic *text* or _text_
- *  - Inline code `code`
- */
-
 import {
   and,
   consume,
@@ -19,6 +7,7 @@ import {
   createParser,
   createToken,
   EOF,
+  type Grammar,
   not,
   oneOrMany,
   oneOrManySep,
@@ -86,7 +75,7 @@ const mdParser = createParser(
       );
     },
 
-    BLOCK() {
+    BLOCK(): Grammar<any> {
       return or([
         rule(this.BLOCK_QUOTE),
         rule(this.BLOCK_HEADING_WITH_UNDERLINE),

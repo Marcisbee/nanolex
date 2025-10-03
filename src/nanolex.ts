@@ -540,7 +540,10 @@ export function skipIn<V>(
 }
 
 /**
- * Wrap a raw rule accessor (for potential lazy evaluation).
+ * Wrap a raw rule accessor (for potential lazy evaluation) while preserving its exact Grammar type.
+ * Using a higher-kinded generic inference based on the function's own return type
+ * avoids collapsing the inner value type to 'any' when the rawRules object
+ * becomes contextually typed.
  */
 export function rule<V>(r: () => Grammar<V>): Grammar<V> {
   return (ctx) => (r as any).cached(ctx);
@@ -577,10 +580,19 @@ function getCodeLens(chunks: string[], i: number) {
 }
 
 /**
- * Create a parser instance.
- * Returned function: (ruleName, input) => parsedValue | throws on error
- *
- * Optionally pass a skip pattern factory as third argument.
+ * Overload 1 (broad) - keeps precise return types of each rule without prematurely widening.
+ */
+export function createParser<T>(
+  tokens: Token[],
+  rawRules: T,
+  skipFactory?: () => Grammar<any>,
+): <K extends keyof T>(
+  key: K,
+  input: string,
+) => T[K] extends () => Grammar<infer V> ? V : never;
+
+/**
+ * Implementation signature - enforces that rawRules' properties are functions returning Grammar<any>.
  */
 export function createParser<T extends Record<string, () => Grammar<any>>>(
   tokens: Token[],
@@ -594,6 +606,7 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
     "(" + tokens.map((t) => t.source).join("|") + ")",
   );
 
+  // Precompute & cache concrete Grammar instances on each rule function
   for (const key in rawRules) {
     (rawRules[key] as any).cached = rawRules[key]();
   }
@@ -613,6 +626,7 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
 
     let fullRule = fullRules[key];
     if (!fullRule) {
+      // Preserve the exact Grammar type of the base rule
       const base = rule(rawRules[key]) as ReturnType<T[typeof key]>;
       fullRule = and([base, consume(EOF)], ([v]) => v);
       fullRules[key] = fullRule;
@@ -632,6 +646,6 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
         `Parse error: expected ${expectedToken.name} found ${got} at ${position}${codeLens}`,
       );
     }
-    return res[0];
+    return res[0] as UnwrapGrammar<ReturnType<T[typeof key]>>;
   };
 }
