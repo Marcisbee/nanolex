@@ -1,653 +1,373 @@
-// deno-lint-ignore-file ban-unused-ignore no-explicit-any ban-types
-type ErrorToken = {
-  value?: string;
-  got?: string;
-  token?: TokenLike;
-  i: number;
+export type Token = {
+  pattern: string | RegExp;
+  name: string;
+  source: string;
+  test: (v: string) => boolean;
 };
 
-type ComposedTokens = {
-  id: number;
-  tokensParse: RegExp;
-};
+/**
+ * Grammar result union:
+ * Success: [value, null]
+ * Failure: [position, expectedToken]
+ */
+export type GrammarResult = [any, null] | [number, Token];
 
-export const EOF = Symbol("EOF") as any as TokenLike;
+type Grammar = (ctx: Context) => GrammarResult;
 
-export function createToken(
-  token: RegExp | string,
-  name: string = typeof token === "string" ? token : token.source,
-): TokenLike {
-  const isString = typeof token === "string";
+interface Context {
+  input: string;
+  tokens: string[];
+  pos: number;
+  skipRule: Grammar | null;
+}
+
+/** Create a token definition */
+export function createToken(pattern: string | RegExp, name?: string): Token {
+  const isString = typeof pattern === "string";
   const source = isString
-    ? token.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
-    : token.source;
-  const cache = new Map<string, boolean>();
+    ? pattern.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, "\\$&")
+    : pattern.source;
 
+  const cache = new Map<string, boolean>();
   return {
-    token,
-    name,
+    pattern,
     source,
+    name: name || source,
     test(value: string): boolean {
       if (isString) {
-        return value === token;
+        return value === pattern;
       }
-
-      // return value.match(token)?.[0] === value;
-
       let v: boolean;
       return cache.has(value)
         ? cache.get(value)!
-        : ((v = value.match(token)?.[0] === value), cache.set(value, v), v);
-
-      // const regex = new RegExp(`^${this.source}\$`);
-      // return regex.test(value);
+        : ((v = (pattern as RegExp).test(value)), cache.set(value, v), v);
     },
   };
 }
 
-export interface Nanolex {
-  consume: {
-    <Return>(
-      token: TokenLike,
-      transform: (value: string) => Return,
-    ): GrammarLike<Return | undefined>;
-    (token: TokenLike): GrammarLike<string | undefined>;
-  };
-  consumeBehind: {
-    <Return>(
-      token: TokenLike,
-      transform: (value: string) => Return,
-    ): GrammarLike<Return | undefined>;
-    (token: TokenLike): GrammarLike<string | undefined>;
-  };
-  consumeUntil: <Return = string[]>(
-    token: TokenLike | GrammarLike,
-    transform?: (value: string[]) => Return,
-  ) => GrammarLike<any[]>;
-  peek: (rule: GrammarLike) => GrammarLike;
-  oneOrMany: <
-    T extends GrammarLike<any>,
-    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
-    OUT = R[],
-  >(
-    rule: T,
-    transformer?: ((value: R[]) => OUT) | undefined,
-    until?: GrammarLike,
-  ) => GrammarLike<OUT>;
-  zeroOrMany: <
-    T extends GrammarLike<any>,
-    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
-    OUT = R[],
-  >(
-    rule: T,
-    transformer?: ((value: R[]) => OUT) | undefined,
-    until?: GrammarLike,
-  ) => GrammarLike<OUT>;
-  oneOrManySep: <
-    T extends GrammarLike<any>,
-    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
-    OUT = R[],
-  >(
-    rule: T,
-    sep: GrammarLike,
-    transformer?: ((value: R[]) => OUT) | undefined,
-    until?: GrammarLike,
-  ) => GrammarLike<OUT>;
-  zeroOrManySep: <
-    T extends GrammarLike<any>,
-    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
-    OUT = R[],
-  >(
-    rule: T,
-    sep: GrammarLike,
-    transformer?: ((value: R[]) => OUT) | undefined,
-    until?: GrammarLike,
-  ) => GrammarLike<OUT>;
-  zeroOrOne: <
-    T extends GrammarLike<any>,
-    R = T extends GrammarLike<infer U> ? Exclude<U, undefined> : never,
-    OUT = R | void,
-  >(
-    rule: T,
-    transformer?: ((value?: R) => OUT) | undefined,
-  ) => GrammarLike<OUT>;
-  not: (rule: GrammarLike) => GrammarLike<undefined>;
-  and: <
-    T extends GrammarLike<any>[],
-    P extends Record<number, any> = {
-      [K in keyof T]: T[K] extends GrammarLike<infer R> ? Exclude<R, undefined>
-        : never;
-    },
-    OUT = P,
-  >(
-    rules: [...T],
-    transform?:
-      | ((
-        value: P,
-      ) => OUT)
-      | undefined,
-  ) => GrammarLike<OUT>;
-  or: <
-    T extends GrammarLike<any>[],
-    P extends Record<number, any> = {
-      [K in keyof T]: T[K] extends GrammarLike<infer R> ? Exclude<R, undefined>
-        : never;
-    },
-    V = P[number],
-    OUT = V,
-  >(
-    rules: [...T],
-    transform?: ((value: V) => OUT) | undefined,
-  ) => GrammarLike<OUT>;
-  breakLoop: <T extends Function>(type: number, fn: T) => T;
-  patternToSkip: (tokens: GrammarLike) => void;
-  throwIfError: <T extends GrammarLike<any>>(
-    rule: T,
-  ) => T extends GrammarLike<infer R> ? R : any;
-  createError: (value: string) => void;
-}
+export const EOF: Token = {
+  pattern: "",
+  name: "EOF",
+  source: "",
+  test: () => false,
+};
 
-const chunksCache: Record<string, string[]> = {};
-export function nanolex(
-  value: string,
-  { id, tokensParse }: ComposedTokens,
-): Nanolex {
-  let skipCheck = false;
-  let tokensSkip: Function = () => void 0;
-  const loopIndexMap: Record<number, number> = {};
-  const chunks = (chunksCache[value + id] ??= value.split(tokensParse));
-  // chunks ??= value.split(tokensParse);
-  // const chunks = value.split(tokensParse);
-  const chunksLength = chunks.length;
-  // const chunksEndIndex = chunksLength - 1;
-  let i = 0;
-  let deepestError: ErrorToken | undefined;
-  let innerError: ErrorToken | undefined;
-  // let consumeTimes = 0;
+// Internal special tokens for generic errors
+export const UNEXPECTED: Token = {
+  pattern: "",
+  name: "UNEXPECTED",
+  source: "",
+  test: () => false,
+};
 
-  // console.log({ chunks});
+export const INFINITE_LOOP: Token = {
+  pattern: "",
+  name: "INFINITE_LOOP",
+  source: "",
+  test: () => false,
+};
 
-  return {
-    consume,
-    consumeBehind,
-    consumeUntil,
-    peek,
-    oneOrMany: (rule, transformer, until) => many(rule, 1, transformer, until),
-    zeroOrMany: (rule, transformer, until) => many(rule, 0, transformer, until),
-    oneOrManySep: (
-      rule,
-      sep,
-      transformer,
-      until,
-    ) => manySep(rule, sep, 1, transformer, until),
-    zeroOrManySep: (
-      rule,
-      sep,
-      transformer,
-      until,
-    ) => manySep(rule, sep, 0, transformer, until),
-    zeroOrOne,
-    not,
-    and,
-    or,
-    breakLoop,
-    patternToSkip,
-    throwIfError,
-    createError,
-  };
-
-  function patternToSkip(tokens: GrammarLike) {
-    tokensSkip = () => {
-      skipCheck = true;
-      const result = tokens();
-      skipCheck = false;
-
-      return result;
-    };
-  }
-
-  function saveError(error?: ErrorToken) {
-    innerError = error;
-
-    if (!error) {
-      deepestError = undefined;
-      return;
+/** Sequence (AND) combinator */
+export const and =
+  (rules: Grammar[], transform?: (vs: any[]) => any): Grammar => (ctx) => {
+    const startPos = ctx.pos;
+    const values: any[] = [];
+    for (const rule of rules) {
+      const [vOrPos, tokenOrNull] = rule(ctx);
+      if (tokenOrNull !== null) {
+        ctx.pos = startPos;
+        return [vOrPos as number, tokenOrNull];
+      }
+      values.push(vOrPos);
     }
+    return [transform ? transform(values) : values, null];
+  };
 
-    if (error.i >= (deepestError?.i || -1)) {
-      deepestError = error;
-    }
+/** Consume a specific token (forward) */
+export const consume =
+  (token: Token, transform?: (v: string) => any): Grammar => (ctx) => {
+    let i = ctx.pos;
+    const chunks = ctx.tokens;
+    const chunksLength = chunks.length;
+    let c: string | undefined;
 
-    return deepestError;
-  }
+    while (i < chunksLength) {
+      c = chunks[i];
 
-  function createError(value: string) {
-    saveError({
-      value,
-      i,
-    });
-  }
-
-  function many(
-    rule: GrammarLike,
-    atLest: number,
-    transform?: (value: any) => any,
-    until?: GrammarLike,
-  ): GrammarLike {
-    return (): any => {
-      const output = [];
-
-      while (i < chunksLength) {
-        innerError = undefined;
-        const tempI = i;
-        const resultRule = rule();
-
-        if (innerError) {
-          i = tempI;
-
-          if (output.length < atLest) {
-            break;
-          }
-
-          innerError = undefined;
-          break;
-        }
-
-        output.push(resultRule);
-
-        if (until && checkUntil(until)) {
-          break;
-        }
-      }
-
-      if (innerError === undefined && transform) {
-        return transform(output);
-      }
-
-      return output;
-    };
-  }
-  function manySep(
-    rule: GrammarLike,
-    sep: GrammarLike,
-    atLest: number,
-    transform?: (value: any) => any,
-    until?: GrammarLike,
-  ): GrammarLike {
-    return (): any => {
-      let tempI = i;
-      const output = [];
-
-      while (i < chunksLength) {
-        // if (lastI === i) {
-        // 	saveError(deepestError || innerError);
-        // 	break;
-        // }
-
-        innerError = undefined;
-        const resultRule = rule();
-
-        // lastI = i;
-
-        if (innerError) {
-          i = tempI;
-
-          if (output.length < atLest) {
-            break;
-          }
-
-          innerError = undefined;
-          break;
-        }
-
-        tempI = i;
-        output.push(resultRule);
-
-        innerError = undefined;
-        sep();
-
-        if (innerError) {
-          innerError = undefined;
-          i = tempI;
-          break;
-        }
-
-        if (until && checkUntil(until)) {
-          break;
-        }
-      }
-
-      if (innerError === undefined && transform) {
-        return transform(output);
-      }
-
-      return output;
-    };
-  }
-  function peek(rule: GrammarLike): GrammarLike {
-    return (): any => {
-      const tempI = i;
-
-      const tempError = deepestError;
-      // innerError = undefined;
-      const resultRule = rule();
-
-      i = tempI;
-      deepestError = tempError;
-
-      return resultRule;
-    };
-  }
-  function not(rule: GrammarLike): GrammarLike {
-    return (): any => {
-      // const tempI = i;
-
-      const newInnerError = innerError || deepestError;
-      // innerError = undefined;
-      const resultRule = rule();
-
-      if (innerError) {
-        innerError = undefined;
-        return;
-      }
-
-      innerError = newInnerError;
-
-      return resultRule;
-    };
-  }
-  function and<T extends GrammarLike[]>(
-    rules: T,
-    transform?: (value: any) => any,
-  ): GrammarLike {
-    return (): any => {
-      const output = [];
-      const tempI = i;
-
-      for (const rule of rules) {
-        innerError = undefined;
-        const resultRule = rule();
-
-        if (innerError) {
-          i = tempI;
-          break;
-        }
-
-        output.push(resultRule);
-      }
-
-      if (innerError === undefined && transform) {
-        return transform(output);
-      }
-
-      return output;
-    };
-  }
-  function or<T extends GrammarLike[]>(
-    rules: T,
-    transform?: (value: any) => any,
-  ): GrammarLike {
-    return (): any => {
-      const tempI = i;
-
-      for (const rule of rules) {
-        i = tempI;
-        innerError = undefined;
-        const resultRule = rule();
-
-        if (innerError) {
-          continue;
-        }
-
-        if (innerError === undefined && transform) {
-          return transform(resultRule);
-        }
-
-        return resultRule;
-      }
-
-      i = tempI;
-
-      return;
-    };
-  }
-  function zeroOrOne<T extends GrammarLike>(
-    rule: T,
-    transform?: (value?: any) => any,
-  ): GrammarLike {
-    return (): any => {
-      const tempI = i;
-      innerError = undefined;
-      const resultRule = rule();
-
-      if (innerError) {
-        i = tempI;
-        innerError = undefined;
-
-        if (transform) {
-          return transform();
-        }
-
-        return;
-      }
-
-      if (transform) {
-        return transform(resultRule);
-      }
-
-      return resultRule;
-    };
-  }
-  function consumeUntil<Return = string[]>(
-    target: TokenLike | GrammarLike,
-    transform?: (value: string[]) => Return,
-  ): GrammarLike<any[]> {
-    return (): any => {
-      let c: string;
-      const output: string[] = [];
-
-      while (((c = chunks[i]), i < chunksLength)) {
-        if (!c) {
-          i += 1;
-          continue;
-        }
-
-        // EOF sentinel means "gather everything"
-        if (target === EOF) {
-          i += 1;
-          output.push(c);
-          continue;
-        }
-
-        // Grammar (multi-token) sentinel: detect without consuming
-        if (typeof target === "function") {
-          const tempI = i;
-          const prevInner = innerError;
-          innerError = undefined;
-          (target as GrammarLike)();
-          const matched = innerError === undefined;
-          i = tempI;
-          innerError = prevInner;
-          if (matched) {
-            return transform ? transform(output) : output;
-          }
-        } else {
-          // Token sentinel: stop right before it (do not consume)
-          if (target.test(c)) {
-            return transform ? transform(output) : output;
-          }
-        }
-
-        // Consume this chunk and continue scanning
+      if (!c) {
         i += 1;
-        output.push(c);
+        continue;
       }
 
-      if (target === EOF) {
-        return transform ? transform(output) : output;
+      if (token !== EOF && token.test(c)) {
+        i += 1;
+        ctx.pos = i;
+        return [transform ? transform(c) : c, null];
       }
 
-      // Sentinel not found – register error (TokenLike only; GrammarLike has no single token ref)
-      saveError({
-        got: c,
-        token: typeof target === "function" ? undefined : target,
-        i,
-      });
-      return;
-    };
-  }
-  function consume<Return = string>(
-    token: TokenLike,
-    transform?: (value: string) => Return,
-  ): GrammarLike<(Return extends any ? string : Return) | undefined> {
-    return (): any => {
-      // consumeTimes += 1;
-      let c: string;
-
-      while (((c = chunks[i]), i < chunksLength)) {
-        if (!c) {
-          i += 1;
+      const currI = i;
+      if (ctx.skipRule) {
+        // Temporarily disable skipRule reentrancy while running it
+        const startPos = ctx.pos;
+        const skipRule = ctx.skipRule;
+        ctx.skipRule = null;
+        const [_, skipErrToken] = skipRule(ctx);
+        ctx.skipRule = skipRule;
+        // If skip succeeded and consumed something, continue scanning
+        if (skipErrToken === null && ctx.pos > startPos) {
+          i = ctx.pos;
           continue;
         }
+        ctx.pos = currI;
+      }
+      break;
+    }
 
-        if (token !== EOF && token.test(c)) {
-          i += 1;
+    if (token === EOF && i >= chunksLength) {
+      ctx.pos = i;
+      return [transform ? transform("") : "", null];
+    }
 
-          if (transform) {
-            return transform(c);
-          }
+    return [i, token];
+  };
 
-          return c;
+/**
+ * Consume a specific token looking behind current position (backwards).
+ * If token matches the previous non-empty chunk, position is moved one
+ * step back; otherwise failure is reported.
+ */
+export const consumeBehind =
+  (token: Token, transform?: (v: string) => any): Grammar => (ctx) => {
+    let i = ctx.pos;
+    const chunks = ctx.tokens;
+    let c: string | undefined;
+
+    while (i > 0) {
+      c = chunks[i - 1];
+
+      if (!c) {
+        i -= 1;
+        continue;
+      }
+
+      if (token !== EOF && token.test(c)) {
+        ctx.pos = i - 1;
+        return [transform ? transform(c) : c, null];
+      }
+      break;
+    }
+
+    if (token === EOF && i <= 0) {
+      return [transform ? transform("") : "", null];
+    }
+
+    return [Math.max(0, i - 1), token];
+  };
+
+/**
+ * Consume and collect raw string chunks until a sentinel token or rule
+ * is reached. The sentinel token / rule is NOT consumed (lookahead).
+ * - If sentinel is EOF, all remaining chunks are gathered.
+ * - If sentinel is a Grammar, success when that parser matches at the
+ *   current position (without consuming).
+ * - If sentinel is a Token, success when that token matches; failure
+ *   when EOF is reached before that token is found.
+ */
+export const consumeUntil = (
+  target: Token | Grammar,
+  transform?: (vs: string[]) => any,
+): Grammar => {
+  const isGrammar = typeof target === "function";
+  return (ctx) => {
+    const startPos = ctx.pos;
+    const chunks = ctx.tokens;
+    const out: string[] = [];
+    let i = ctx.pos;
+    let c: string | undefined;
+
+    while (i < chunks.length) {
+      c = chunks[i];
+
+      if (!c) {
+        i += 1;
+        continue;
+      }
+
+      // EOF sentinel: gather all
+      if (!isGrammar && target === EOF) {
+        out.push(c);
+        i += 1;
+        continue;
+      }
+
+      if (isGrammar) {
+        const savePos = ctx.pos;
+        const res = (target as Grammar)(ctx);
+        const matched = res[1] === null;
+        ctx.pos = savePos; // restore (lookahead)
+        if (matched) {
+          ctx.pos = i;
+          return [transform ? transform(out) : out, null];
         }
-
-        const currI = i;
-        if (!skipCheck && tokensSkip() !== undefined) {
-          continue;
+      } else {
+        // Token sentinel
+        if ((target as Token).test(c)) {
+          ctx.pos = i;
+          return [transform ? transform(out) : out, null];
         }
-        i = currI;
+      }
 
+      // Consume this chunk
+      out.push(c);
+      i += 1;
+      ctx.pos = i;
+    }
+
+    // If EOF sentinel, success
+    if (!isGrammar && target === EOF) {
+      return [transform ? transform(out) : out, null];
+    }
+
+    // Failed to find token sentinel
+    if (!isGrammar) {
+      return [ctx.pos, target as Token];
+    }
+
+    // Grammar sentinel not found - generic failure
+    return [startPos, UNEXPECTED];
+  };
+};
+
+/** OR combinator */
+export const or =
+  (rules: Grammar[], transform?: (v: any) => any): Grammar => (ctx) => {
+    const startPos = ctx.pos;
+    let lastError: [number, Token] | null = null;
+    for (const rule of rules) {
+      const res = rule(ctx);
+      if (res[1] === null) {
+        return [transform ? transform(res[0]) : res[0], null];
+      }
+      lastError = res as [number, Token];
+      ctx.pos = startPos;
+    }
+    return lastError || [startPos, EOF];
+  };
+
+/** zeroOrMany combinator */
+export const zeroOrMany =
+  (rule: Grammar, transform?: (vs: any[]) => any): Grammar => (ctx) => {
+    const values: any[] = [];
+    while (true) {
+      const startPos = ctx.pos;
+      const res = rule(ctx);
+      if (res[1] !== null) {
+        ctx.pos = startPos;
         break;
       }
-
-      if (token === EOF && i >= chunksLength) {
-        return;
+      values.push(res[0]);
+      if (ctx.pos === startPos) {
+        return [ctx.pos, INFINITE_LOOP];
       }
+    }
+    return [transform ? transform(values) : values, null];
+  };
 
-      if (c == null) {
-        saveError({
-          got: c,
-          token,
-          i: i - 1,
-        });
-        return;
+/** zeroOrMany with separator */
+export const zeroOrManySep =
+  (rule: Grammar, sep: Grammar, transform?: (vs: any[]) => any): Grammar =>
+  (ctx) => {
+    const values: any[] = [];
+    let first = true;
+    while (true) {
+      const startPos = ctx.pos;
+      if (!first) {
+        const sepRes = sep(ctx);
+        if (sepRes[1] !== null) {
+          break;
+        }
       }
-
-      saveError({
-        got: c,
-        token,
-        i: i,
-      });
-      return;
-    };
-  }
-  function consumeBehind<Return = string>(
-    token: TokenLike,
-    transform?: (value: string) => Return,
-  ): GrammarLike<(Return extends any ? string : Return) | undefined> {
-    return (): any => {
-      let c: string;
-
-      while (((c = chunks[i - 1]), i > 0)) {
-        if (!c) {
-          i -= 1;
-          continue;
-        }
-
-        if (token !== EOF && token.test(c)) {
-          i -= 1;
-
-          if (transform) {
-            return transform(c);
-          }
-
-          return c;
-        }
-
-        // We do not perform skip checks in reverse
+      const res = rule(ctx);
+      if (res[1] !== null) {
+        if (!first) ctx.pos = startPos;
         break;
       }
-
-      if (token === EOF && i <= 0) {
-        return;
-      }
-
-      if (c == null) {
-        saveError({
-          got: c,
-          token,
-          i: i,
-        });
-        return;
-      }
-
-      saveError({
-        got: c,
-        token,
-        i: i - 1,
-      });
-      return;
-    };
-  }
-  function throwIfError<T extends GrammarLike>(rule: T): any {
-    const output = rule();
-
-    // console.log({ consumeTimes });
-
-    if (i !== chunksLength && deepestError) {
-      const i = deepestError.value ? deepestError.i - 1 : deepestError.i;
-
-      const [codeLens, position] = getCodeLens(chunks, i);
-      const deepestErrorMessage = deepestError.value ||
-        `expecting "${deepestError.token?.name ?? "EOF"}", got "${
-          deepestError.got ?? "EOF"
-        }"`;
-
-      throw new Error(`${deepestErrorMessage} at ${position}${codeLens}`);
+      values.push(res[0]);
+      first = false;
     }
+    return [transform ? transform(values) : values, null];
+  };
 
-    return output;
-  }
-  function breakLoop<T extends Function>(type: number, fn: T): T {
-    if (loopIndexMap[type] === i) {
-      // Break out of loop
-      return (() => {
-        saveError(deepestError);
-        loopIndexMap[type] = undefined as any;
-      }) as any;
+/** oneOrMany */
+export const oneOrMany = (
+  rule: Grammar,
+  transform?: (vs: any[]) => any,
+): Grammar =>
+  and(
+    [rule, zeroOrMany(rule)],
+    ([first, rest]) =>
+      transform ? transform([first, ...rest]) : [first, ...rest],
+  );
+
+/** oneOrMany with separator */
+export const oneOrManySep = (
+  rule: Grammar,
+  sep: Grammar,
+  transform?: (vs: any[]) => any,
+): Grammar =>
+  and(
+    [rule, zeroOrMany(and([sep, rule]), (seps) => seps.map((s) => s[1]))],
+    ([first, rest]) =>
+      transform ? transform([first, ...rest]) : [first, ...rest],
+  );
+
+/** zeroOrOne */
+export const zeroOrOne =
+  (rule: Grammar, transform?: (v: any) => any): Grammar => (ctx) => {
+    const startPos = ctx.pos;
+    const res = rule(ctx);
+    if (res[1] === null) {
+      return [transform ? transform(res[0]) : res[0], null];
     }
+    ctx.pos = startPos;
+    return [transform ? transform(null) : null, null];
+  };
 
-    loopIndexMap[type] = i;
+/** Peek (lookahead) */
+export const peek = (rule: Grammar): Grammar => (ctx) => {
+  const startPos = ctx.pos;
+  const res = rule(ctx);
+  ctx.pos = startPos;
+  return res;
+};
 
-    return fn;
+/** Negative lookahead */
+export const not = (rule: Grammar): Grammar => (ctx) => {
+  const res = peek(rule)(ctx);
+  if (res[1] === null) {
+    return [ctx.pos, UNEXPECTED];
   }
+  return [null, null];
+};
 
-  // Utils
-  function checkUntil(until: GrammarLike) {
-    const tempI = i;
-    innerError = undefined;
-    until();
-    i = tempI;
+/** Apply a temporary skip rule inside another rule */
+export const skipIn =
+  (skip: Grammar | null, rule: Grammar): Grammar => (ctx) => {
+    const originalSkip = ctx.skipRule;
+    ctx.skipRule = skip;
+    const result = rule(ctx);
+    ctx.skipRule = originalSkip;
+    return result;
+  };
 
-    if (!innerError) {
-      return true;
-    }
+/** Wrap a raw rule accessor (for potential lazy evaluation) */
+export const rule = (r: () => Grammar): Grammar => {
+  return (ctx) => (r as any).cached(ctx);
+};
 
-    innerError = undefined;
-
-    return false;
-  }
-}
-
+/**
+ * Produce a code lens / pointer excerpt for error reporting.
+ */
 function getCodeLens(chunks: string[], i: number) {
   const c = chunks[i] || "";
   const textBefore = chunks.slice(0, i + 1).join("");
@@ -672,52 +392,59 @@ function getCodeLens(chunks: string[], i: number) {
   }${new Array(c.length).fill("^").join("") || "^"}`;
   const codeLens = `\n\n${codeLensBefore}${codeLensTarget}\n${codeLensPointer}`;
 
-  return [codeLens, position];
+  return { codeLens, position };
 }
 
-// This is intentionally invalid type, to throw ts errors if invalid grammar is provided
-interface GrammarLikeResponse<T = any> {
-  response: T;
-}
+/**
+ * Create a parser instance.
+ * Returned function: (ruleName, input) => parsedValue | throws on error
+ *
+ * Optionally pass a skip pattern factory as third argument.
+ */
+export function createParser<T extends Record<string, () => Grammar>>(
+  tokens: Token[],
+  rawRules: T,
+  skipFactory?: () => Grammar,
+) {
+  const tokenRegex = new RegExp(
+    "(" + tokens.map((t) => t.source).join("|") + ")",
+  );
 
-interface GrammarLike<T = any> {
-  (): GrammarLikeResponse<T>;
-  set?: GrammarLike<T>;
-}
+  // Materialize rule implementations once (store under .cached)
+  for (const key in rawRules) {
+    (rawRules[key] as any).cached = rawRules[key]();
+  }
 
-interface TokenLike {
-  token: string | RegExp;
-  name: string;
-  source: string;
-  test: (value: string) => boolean;
-}
+  const cache: Record<string, string[]> = {};
+  let fullRule!: Grammar;
+  const skipRule = skipFactory ? skipFactory() : null;
 
-let composedTokenId = 0;
-export function getComposedTokens(tokens: TokenLike[]): ComposedTokens {
-  return {
-    id: composedTokenId++,
-    tokensParse: new RegExp("(" + tokens.map((t) => t.source).join("|") + ")"),
+  return (key: keyof T, input: string) => {
+    const tokensArr = (cache[input] ??= input.split(tokenRegex));
+    const ctx: Context = {
+      input,
+      tokens: tokensArr,
+      pos: 0,
+      skipRule,
+    };
+    fullRule ??= and(
+      [rule(rawRules[key]), consume(EOF)],
+      ([v]) => v,
+    );
+    const res = fullRule(ctx);
+    if (res[1] !== null) {
+      const [pos, expectedToken] = res as [number, Token];
+      const got = pos >= ctx.tokens.length
+        ? EOF.name
+        : JSON.stringify(ctx.tokens[pos]);
+      const { codeLens, position } = getCodeLens(
+        ctx.tokens,
+        Math.min(pos, ctx.tokens.length - 1),
+      );
+      throw new Error(
+        `Parse error: expected ${expectedToken.name} found ${got} at ${position}${codeLens}`,
+      );
+    }
+    return res[0];
   };
-}
-
-export function createPattern<T = any>(
-  name: string,
-): GrammarLike<T | undefined> {
-  let pattern: any = () => {
-    throw new Error(`Pattern ${name} not defined`);
-  };
-  const out: GrammarLike<T | undefined> = () => pattern();
-
-  Object.defineProperty(out, "name", {
-    value: name,
-  });
-  Object.defineProperty(out, "set", {
-    configurable: true,
-    enumerable: true,
-    set(v: any) {
-      pattern = v;
-    },
-  });
-
-  return out;
 }
