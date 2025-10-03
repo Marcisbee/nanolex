@@ -534,6 +534,31 @@ export function skipIn<V>(
     const originalSkip = ctx.skipRule;
     ctx.skipRule = skip;
     const result = rule(ctx);
+
+    // When the inner rule succeeds, eagerly consume any trailing skip tokens.
+    // This ensures patterns like `{expr }` (whitespace before a delimiter) work,
+    // since otherwise the trailing whitespace token would remain and break the
+    // caller which expects the next significant token (e.g. a closing brace).
+    if (result[1] === null && skip) {
+      while (true) {
+        const before = ctx.pos;
+        const saved = ctx.skipRule;
+        ctx.skipRule = null; // disable nested skip attempts inside the skip rule itself
+        const [, errTok] = skip(ctx);
+        ctx.skipRule = saved;
+
+        if (errTok !== null) {
+          // Skip rule failed here; restore position and stop.
+          ctx.pos = before;
+          break;
+        }
+        if (ctx.pos === before) {
+          // Defensive: prevent infinite loop if skip rule consumed nothing.
+          break;
+        }
+      }
+    }
+
     ctx.skipRule = originalSkip;
     return result;
   };
