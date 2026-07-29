@@ -46,7 +46,7 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
   // Precompile an anchored full-match regex for RegExp tokens
   const fullRegex = isString ? null : new RegExp(`^${source}$`);
 
-  const cache: Record<string, boolean> = {};
+  const cache: Record<string, boolean> = Object.create(null);
   return {
     pattern,
     source,
@@ -168,6 +168,28 @@ export function consume(
 }
 
 /**
+ * Consume the next non-empty tokenizer chunk without testing its token type.
+ * Unlike consume(), raw consumption includes whitespace and other trivia.
+ * This is useful for recursive grammars that preserve arbitrary source text.
+ */
+export function consumeAny<T>(transform: (v: string) => T): Grammar<T>;
+export function consumeAny(): Grammar<string>;
+export function consumeAny(
+  transform?: (v: string) => unknown,
+): Grammar<any> {
+  return (ctx) => {
+    const chunks = ctx.tokens;
+    let i = ctx.pos;
+    while (i < chunks.length && !chunks[i]) i++;
+    if (i >= chunks.length) return [i, EOF];
+
+    const value = chunks[i];
+    ctx.pos = i + 1;
+    return [transform ? transform(value) : value, null];
+  };
+}
+
+/**
  * Consume a specific token looking behind current position (backwards).
  * On success moves one position back.
  */
@@ -251,10 +273,10 @@ export function consumeUntil(
       }
 
       if (isGrammar) {
-        const savePos = ctx.pos;
+        ctx.pos = i;
         const res = (target as Grammar<any>)(ctx);
         const matched = res[1] === null;
-        ctx.pos = savePos;
+        ctx.pos = i;
         if (matched) {
           ctx.pos = i;
           return [transform ? transform(out) : out, null];
@@ -509,9 +531,11 @@ export function peek<V>(rule: Grammar<V>): Grammar<V> {
  */
 export function not(rule: Grammar<any>): Grammar<null> {
   return (ctx) => {
+    const startPos = ctx.pos;
     const res = rule(ctx);
+    ctx.pos = startPos;
     if (res[1] === null) {
-      return [ctx.pos, UNEXPECTED];
+      return [startPos, UNEXPECTED];
     }
     return [null, null];
   };
@@ -613,8 +637,8 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
     (rawRules[key] as any).cached ??= rawRules[key]();
   }
 
-  const cache: Record<string, string[]> = {};
-  const fullRules: Partial<Record<keyof T, Grammar<any>>> = {};
+  const cache: Record<string, string[]> = Object.create(null);
+  const fullRules: Partial<Record<keyof T, Grammar<any>>> = Object.create(null);
   const skipRule = skipFactory ? skipFactory() : null;
 
   return (key, input) => {
