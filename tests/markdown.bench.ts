@@ -44,3 +44,22 @@ Deno.bench(
 		parser(largeDocument);
 	},
 );
+
+const unmatchedBrackets = "[".repeat(100_000);
+const delimiterRuns = `${"*".repeat(10_000)}text${"*".repeat(10_000)}`;
+
+Deno.bench(
+	"markdown: 100k unmatched brackets",
+	{ group: "markdown-adversarial" },
+	() => {
+		parser(unmatchedBrackets);
+	},
+);
+
+Deno.bench(
+	"markdown: 20k delimiter run",
+	{ group: "markdown-adversarial" },
+	() => {
+		parser(delimiterRuns);
+	},
+);

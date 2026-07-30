@@ -118,6 +118,26 @@ npm install nanolex
 deno add jsr:@marcisbee/nanolex
 ```
 
+## Markdown
+
+Nanolex includes a dependency-free CommonMark 0.31.2 and GFM 0.29 parser:
+
+```ts
+import { parseMarkdown, renderMarkdown } from "nanolex/markdown";
+
+const ast = parseMarkdown("- [x] **shipped**", { gfm: true });
+const html = renderMarkdown(ast, { gfm: true });
+```
+
+The parser passes all 652 official CommonMark 0.31.2 examples. GFM mode
+adds tables, strikethrough, extended autolinks, task lists, and disallowed-tag
+filtering. Parsing returns a typed compact AST; rendering is optional.
+
+For lexer-free or context-sensitive grammars, use `SourceCursor`,
+`createSourceParser`, `sourceLiteral`, `sourcePattern`, and `transactional`.
+These primitives provide per-parse state, dynamic matching, and explicit
+checkpoint rollback without building a token array.
+
 ## Core API
 
 ### Tokens

@@ -88,7 +88,10 @@ Deno.test(`parses "_this_not_italic_"`, () => {
 	expect(parser("_this_not_italic_")).toEqual([
 		{
 			type: "p",
-			content: ["_", "this", "_", "not", "_", "italic", "_"],
+			content: [{
+				type: "i",
+				content: ["this", "_", "not", "_", "italic"],
+			}],
 		},
 	]);
 });

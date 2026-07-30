@@ -60,6 +60,7 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:commonmark-spec@~0.31.2",
         "npm:esbuild@~0.28.1",
         "npm:typescript@^5.3.3"
       ]
