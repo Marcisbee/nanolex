@@ -6,7 +6,7 @@
   "module": "./dist/nanolex.mjs",
   "types": "./dist/nanolex.d.ts",
   "scripts": {
-    "build": "esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.js --format=cjs && esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.mjs --format=esm && esbuild ./src/markdown.ts --bundle --minify --sourcemap=linked --outfile=./dist/markdown.js --format=cjs && esbuild ./src/markdown.ts --bundle --minify --sourcemap=linked --outfile=./dist/markdown.mjs --format=esm && npm run declarations",
+    "build": "esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.js --format=cjs && esbuild ./src/nanolex.ts --bundle --minify --sourcemap=linked --outfile=./dist/nanolex.mjs --format=esm && npm run declarations",
     "dev": "node ./scripts/dev.mjs",
     "lint": "deno lint",
     "declarations": "tsc --declarationDir dist --emitDeclarationOnly --declaration",
@@ -36,11 +36,6 @@
   },
   "exports": {
     "./package.json": "./dist/package.json",
-    "./markdown": {
-      "types": "./dist/markdown.d.ts",
-      "require": "./dist/markdown.js",
-      "import": "./dist/markdown.mjs"
-    },
     ".": {
       "types": "./dist/nanolex.d.ts",
       "require": "./dist/nanolex.js",

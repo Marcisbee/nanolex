@@ -1,8 +1,5 @@
 {
   "name": "@marcisbee/nanolex",
-  "exports": {
-    ".": "./src/nanolex.ts",
-    "./markdown": "./src/markdown.ts"
-  },
+  "exports": "./src/nanolex.ts",
   "version": "0.8.2"
 }

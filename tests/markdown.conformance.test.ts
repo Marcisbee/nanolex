@@ -2,7 +2,7 @@
 import { expect } from "jsr:@std/expect";
 import commonmark from "npm:commonmark-spec@0.31.2";
 
-import { parseMarkdown, renderMarkdown } from "../src/markdown.ts";
+import { parseMarkdown, renderMarkdown } from "./markdown.ts";
 
 Deno.test("passes all 652 CommonMark 0.31.2 examples", () => {
 	for (
