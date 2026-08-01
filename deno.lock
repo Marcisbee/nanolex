@@ -1,5 +1,5 @@
 {
-  "version": "4",
+  "version": "5",
   "specifiers": {
     "jsr:@std/assert@^1.0.11": "1.0.11",
     "jsr:@std/expect@*": "1.0.13",
@@ -60,7 +60,8 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
-        "npm:esbuild@~0.20.1",
+        "npm:commonmark-spec@~0.31.2",
+        "npm:esbuild@~0.28.1",
         "npm:typescript@^5.3.3"
       ]
     }

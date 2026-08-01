@@ -21,11 +21,178 @@ export type Grammar<T> = (ctx: Context) => GrammarResult<T>;
 /**
  * Parsing context shared across grammar invocations.
  */
-interface Context {
+export interface Context {
   input: string;
   tokens: string[];
   pos: number;
   skipRule: Grammar<unknown> | null;
+}
+
+/** A lightweight cursor for lexer-free, character-level grammars. */
+export class SourceCursor {
+  readonly input: string;
+  offset = 0;
+
+  constructor(input: string) {
+    this.input = input;
+  }
+
+  get eof(): boolean {
+    return this.offset >= this.input.length;
+  }
+
+  get remaining(): string {
+    return this.input.slice(this.offset);
+  }
+
+  peek(distance = 0): string | undefined {
+    return this.input[this.offset + distance];
+  }
+
+  checkpoint(): number {
+    return this.offset;
+  }
+
+  restore(checkpoint: number): void {
+    if (
+      !Number.isInteger(checkpoint) || checkpoint < 0 ||
+      checkpoint > this.input.length
+    ) {
+      throw new RangeError("Invalid source checkpoint");
+    }
+    this.offset = checkpoint;
+  }
+
+  advance(length = 1): string {
+    if (!Number.isInteger(length) || length < 0) {
+      throw new RangeError(
+        "Source advance length must be a non-negative integer",
+      );
+    }
+    const start = this.offset;
+    this.offset = Math.min(this.input.length, start + length);
+    return this.input.slice(start, this.offset);
+  }
+
+  consume(value: string): string | null {
+    if (!this.input.startsWith(value, this.offset)) return null;
+    this.offset += value.length;
+    return value;
+  }
+
+  match(pattern: RegExp): RegExpExecArray | null {
+    const flags = pattern.flags.replace(/[gy]/g, "");
+    const anchored = new RegExp(`^(?:${pattern.source})`, flags);
+    const match = anchored.exec(this.remaining);
+    if (match) this.offset += match[0].length;
+    return match;
+  }
+
+  consumeWhile(test: (char: string, offset: number) => boolean): string {
+    const start = this.offset;
+    while (
+      this.offset < this.input.length &&
+      test(this.input[this.offset], this.offset)
+    ) {
+      this.offset++;
+    }
+    return this.input.slice(start, this.offset);
+  }
+
+  slice(start: number, end = this.offset): string {
+    return this.input.slice(start, end);
+  }
+}
+
+export type SourceError = {
+  offset: number;
+  expected: string;
+};
+
+export type SourceResult<T> = [T, null] | [null, SourceError];
+
+export interface SourceContext<S> {
+  cursor: SourceCursor;
+  state: S;
+}
+
+export type SourceGrammar<T, S = undefined> = (
+  context: SourceContext<S>,
+) => SourceResult<T>;
+
+/** Match a literal or dynamically computed literal at the current offset. */
+export function sourceLiteral<S = undefined>(
+  value: string | ((context: SourceContext<S>) => string),
+  expected?: string,
+): SourceGrammar<string, S> {
+  return (context) => {
+    const literal = typeof value === "function" ? value(context) : value;
+    const offset = context.cursor.offset;
+    const matched = context.cursor.consume(literal);
+    return matched === null
+      ? [null, { offset, expected: expected ?? JSON.stringify(literal) }]
+      : [matched, null];
+  };
+}
+
+/** Match an anchored regular expression without tokenizing the input. */
+export function sourcePattern<S = undefined>(
+  pattern: RegExp,
+  expected = pattern.source,
+): SourceGrammar<RegExpExecArray, S> {
+  const flags = pattern.flags.replace(/[gy]/g, "");
+  const anchored = new RegExp(`^(?:${pattern.source})`, flags);
+  return (context) => {
+    const offset = context.cursor.offset;
+    const matched = anchored.exec(context.cursor.remaining);
+    if (matched) context.cursor.advance(matched[0].length);
+    return matched ? [matched, null] : [null, { offset, expected }];
+  };
+}
+
+/**
+ * Run a source grammar transactionally. Cursor and parse state are restored
+ * when the grammar fails, making bounded speculative parsing explicit.
+ */
+export function transactional<T, S>(
+  grammar: SourceGrammar<T, S>,
+  cloneState: (state: S) => S = (state) => state,
+): SourceGrammar<T, S> {
+  return (context) => {
+    const checkpoint = context.cursor.checkpoint();
+    const state = cloneState(context.state);
+    const result = grammar(context);
+    if (result[1] !== null) {
+      context.cursor.restore(checkpoint);
+      context.state = state;
+    }
+    return result;
+  };
+}
+
+/** Create a reusable lexer-free parser with isolated state for every parse. */
+export function createSourceParser<T, S = undefined>(
+  grammar: SourceGrammar<T, S>,
+  createState: () => S = (() => undefined as S),
+): (input: string) => T {
+  return (input) => {
+    const context: SourceContext<S> = {
+      cursor: new SourceCursor(input),
+      state: createState(),
+    };
+    const result = grammar(context);
+    if (result[1] !== null) {
+      throw new Error(
+        `Parse error: expected ${result[1].expected} at ${result[1].offset}`,
+      );
+    }
+    if (!context.cursor.eof) {
+      throw new Error(
+        `Parse error: unexpected input at ${context.cursor.offset}`,
+      );
+    }
+    return result[0];
+  };
 }
 
 /** Utility: extract the value type from a Grammar */
@@ -46,16 +213,13 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
   // Precompile an anchored full-match regex for RegExp tokens
   const fullRegex = isString ? null : new RegExp(`^${source}$`);
 
-  const cache: Record<string, boolean> = {};
   return {
     pattern,
     source,
     name: name || source,
     test: isString
       ? (value: string): boolean => value === pattern
-      : (value: string): boolean => {
-        return cache[value] ??= (fullRegex as RegExp).test(value);
-      },
+      : (value: string): boolean => (fullRegex as RegExp).test(value),
   };
 }
 
@@ -613,12 +777,11 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
     (rawRules[key] as any).cached ??= rawRules[key]();
   }
 
-  const cache: Record<string, string[]> = {};
   const fullRules: Partial<Record<keyof T, Grammar<any>>> = {};
   const skipRule = skipFactory ? skipFactory() : null;
 
   return (key, input) => {
-    const tokensArr = (cache[input] ??= input.split(tokenRegex));
+    const tokensArr = input.split(tokenRegex);
     const ctx: Context = {
       input,
       tokens: tokensArr,
