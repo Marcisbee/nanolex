@@ -855,3 +855,96 @@ Deno.test(`media`, () => {
   ];
   assertEquals(parser(input), expectation);
 });
+
+Deno.test("comments, escaped strings, modern values, nesting, and generic at-rules", () => {
+  const input = `
+    /* leading comment */
+    @charset "UTF-8";
+    @import url("theme.css") layer(base);
+
+    @font-face {
+      font-family: "A\\\"B";
+      src: url(font.woff2) format("woff2");
+    }
+
+    @supports selector(:has(> img)) and (display: grid) {
+      .card:not(:is(.disabled, [aria-hidden="true"])) {
+        color: #11223344;
+        background:
+          linear-gradient(45deg, rgb(0 0 0 / 50%), transparent),
+          url("hero image.svg");
+        width: calc(100% - 2rem);
+
+        & > .title {
+          margin: 1rem 2ch;
+        }
+      }
+    }
+  `;
+
+  const result = parser(input);
+  assertEquals(result[0], {
+    type: "atrule",
+    scope: "charset",
+    prelude: `"UTF-8"`,
+    ruleset: undefined,
+  });
+  assertEquals(result[1], {
+    type: "atrule",
+    scope: "import",
+    prelude: `url("theme.css") layer(base)`,
+    ruleset: undefined,
+  });
+  assertEquals(result[2].ruleset[0].value, [{
+    type: "text",
+    value: `A"B`,
+  }]);
+  assertEquals(result[2].ruleset[1].value, [
+    { type: "url", value: "font.woff2" },
+    {
+      type: "fn",
+      name: "format",
+      value: [[{ type: "text", value: "woff2" }]],
+    },
+  ]);
+
+  const supports = result[3];
+  assertEquals(
+    supports.prelude,
+    "selector(:has(> img)) and (display: grid)",
+  );
+  const card = supports.ruleset[0];
+  assertEquals(
+    card.selectors[0][1].value,
+    `:is(.disabled, [aria-hidden="true"])`,
+  );
+  assertEquals(card.rules[0].value, ["#11223344"]);
+  assertEquals(card.rules[1].value[1], ",");
+  assertEquals(card.rules[1].value[2], {
+    type: "url",
+    value: "hero image.svg",
+  });
+  assertEquals(card.rules[2].value[0].value[0], [
+    { type: "size", value: 100, unit: "%" },
+    "-",
+    { type: "size", value: 2, unit: "rem" },
+  ]);
+  assertEquals(card.rules[3].selectors[0].scope, "combinator");
+  assertEquals(card.rules[3].selectors[0].value[0][0].scope, "nesting");
+});
+
+Deno.test("vendor keyframes and hex-like IDs", () => {
+  const result = parser(`
+    #-abc, #deadbeef, .constructor, #__proto__ {}
+    @-webkit-keyframes pulse {
+      0%, 100% { opacity: .5; }
+    }
+  `);
+
+  assertEquals(result[0].selectors[0][0].name, "-abc");
+  assertEquals(result[0].selectors[1][0].name, "deadbeef");
+  assertEquals(result[0].selectors[2][0].name, "constructor");
+  assertEquals(result[0].selectors[3][0].name, "__proto__");
+  assertEquals(result[1].scope, "keyframes");
+  assertEquals(result[1].name, "pulse");
+});

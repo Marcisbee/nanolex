@@ -2,6 +2,7 @@
 import {
   and,
   consume,
+  consumeAny,
   consumeUntil,
   createParser,
   createToken,
@@ -23,6 +24,13 @@ import {
 
 const LineBreak = createToken(/[\n\r]/, "LineBreak");
 const Whitespace = createToken(/[ \t]+/, "Whitespace");
+const Comment = createToken(/\/\*[\s\S]*?\*\//, "Comment");
+const StringDouble = createToken(/"(?:\\[\s\S]|[^"\\])*"/, "StringDouble");
+const StringSingle = createToken(/'(?:\\[\s\S]|[^'\\])*'/, "StringSingle");
+const Url = createToken(
+  /url\(\s*(?:"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|(?:\\.|[^\\()"'\s])*)\s*\)/,
+  "Url",
+);
 const QuoteDouble = createToken(`"`, "QuoteDouble");
 const QuoteSingle = createToken(`'`, "QuoteSingle");
 const LParen = createToken("(");
@@ -49,22 +57,37 @@ const Minus = createToken("-");
 const Equal = createToken("=");
 const Hash = createToken("#");
 const Star = createToken("*");
+const Slash = createToken("/");
+const Ampersand = createToken("&");
+const Question = createToken("?");
 const Important = createToken("important");
-const Hex = createToken(/#(?:(?:[0-9a-fA-F]{2}){3}|(?:[0-9a-fA-F]){3})/, "Hex");
+// CSS tokenization treats colors and ID-like values as the same hash token.
+// Semantic validation (for example, valid hex-color lengths) belongs downstream.
+const Hex = createToken(
+  /#(?:[_a-zA-Z0-9-]|[^\0-\x7f]|\\[^\r\n\f])+/,
+  "Hash",
+);
 const CaseInsensitive = createToken(/[iI]/, "i");
 const CaseSensitive = createToken(/[sS]/, "s");
 const CSSUnits = createToken(
-  /em|ex|%|px|cm|mm|in|pt|pc|ch|rem|vh|vw|vmin|vmax|deg/,
+  /cap|ch|cm|cqb|cqh|cqi|cqmax|cqmin|cqw|deg|dpcm|dpi|dppx|dvh|dvw|em|ex|fr|grad|Hz|ic|in|kHz|lh|lvh|lvw|mm|ms|pc|pt|px|Q|rad|rcap|rch|rem|rex|ric|rlh|s|svh|svw|turn|vb|vh|vi|vmax|vmin|vw|x|%/,
   "Unit",
 );
-const CSSTime = createToken(/ms|s|m/, "Time");
+const CSSTime = createToken(/ms|s/, "Time");
 const NumberLiteral = createToken(
-  /-?(?:0|[1-9]\d*)?(?:\.\d+)?(?:[eE][+-]?\d+)?/,
+  /-?(?:(?:\d*\.\d+)|(?:\d+\.?))(?:[eE][+-]?\d+)?/,
   "NumberLiteral",
 );
-const StringLiteral = createToken(/[a-zA-Z_$][a-zA-Z0-9_$-]*/, "Ident");
+const CustomProperty = createToken(
+  /--(?:[_a-zA-Z]|[^\0-\x7f]|\\[^\r\n\f])(?:[_a-zA-Z0-9-]|[^\0-\x7f]|\\[^\r\n\f])*/,
+  "CustomProperty",
+);
+const StringLiteral = createToken(
+  /-?(?:[_a-zA-Z]|[^\0-\x7f]|\\[0-9a-fA-F]{1,6}[ \t\r\n\f]?|\\[^\r\n\f0-9a-fA-F])(?:[_a-zA-Z0-9-]|[^\0-\x7f]|\\[0-9a-fA-F]{1,6}[ \t\r\n\f]?|\\[^\r\n\f0-9a-fA-F])*/,
+  "Ident",
+);
 const FromTo = createToken(/from|to/, "FromTo");
-const Keyframes = createToken("keyframes");
+const Keyframes = createToken(/(?:-(?:webkit|moz)-)?keyframes/, "keyframes");
 const Media = createToken("media");
 const And = createToken("and");
 const OrToken = createToken("or");
@@ -75,6 +98,10 @@ const Not = createToken("not");
  * Order intentionally groups structural tokens early; identifiers & numbers later.
  */
 const tokens = [
+  Comment,
+  Url,
+  StringDouble,
+  StringSingle,
   Whitespace,
   LineBreak,
   LParen,
@@ -99,7 +126,11 @@ const tokens = [
   Hex,
   Hash,
   Star,
+  Slash,
+  Ampersand,
+  Question,
   Important,
+  CustomProperty,
   StringLiteral,
   NumberLiteral,
   CSSUnits,
@@ -118,6 +149,26 @@ const tokens = [
   Not,
 ];
 
+function decodeCssString(value: string): string {
+  return value.slice(1, -1)
+    .replace(/\\(?:\r\n|[\n\r\f])/g, "")
+    .replace(
+      /\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?|\\(.)/gs,
+      (_, hex: string | undefined, escaped: string | undefined) =>
+        hex ? String.fromCodePoint(Number.parseInt(hex, 16)) : escaped ?? "",
+    );
+}
+
+function parseUrl(value: string) {
+  const raw = value.slice(value.indexOf("(") + 1, -1).trim();
+  return {
+    type: "url",
+    value: raw.startsWith(`"`) || raw.startsWith(`'`)
+      ? decodeCssString(raw)
+      : raw.replace(/\\(.)/gs, "$1"),
+  };
+}
+
 /* -------------------------------------------------------------------------- */
 /* Parser definition                                                          */
 /* -------------------------------------------------------------------------- */
@@ -130,7 +181,37 @@ const cssParser = createParser(
         rule(this.RULESET),
         rule(this.KEYFRAMES),
         rule(this.MEDIA),
+        rule(this.AT_RULE),
       ]));
+    },
+
+    /* --------------------------- Generic at-rules --------------------------- */
+    AT_RULE(): Grammar<any> {
+      return and([
+        consume(At),
+        consume(StringLiteral),
+        consumeUntil(
+          or([peek(consume(Semicolon)), peek(consume(LCurly))]),
+          (parts) => parts.join("").trim(),
+        ),
+        or([
+          consume(Semicolon, () => undefined),
+          and([
+            consume(LCurly),
+            zeroOrMany(or([
+              rule(this.AT_RULE),
+              rule(this.RULESET),
+              rule(this.DECLARATION),
+            ])),
+            consume(RCurly),
+          ], ([, body]) => body),
+        ]),
+      ], ([, name, prelude, body]) => ({
+        type: "atrule",
+        scope: name.toLowerCase(),
+        prelude,
+        ruleset: body,
+      }));
     },
 
     /* ------------------------------ @keyframes ------------------------------ */
@@ -175,7 +256,7 @@ const cssParser = createParser(
         consume(Media),
         rule(this.MEDIA_QUERIES),
         consume(LCurly),
-        zeroOrMany(rule(this.RULESET)),
+        zeroOrMany(or([rule(this.RULESET), rule(this.AT_RULE)])),
         consume(RCurly),
       ], ([, , query, , ruleset]) => ({
         type: "atrule",
@@ -251,10 +332,14 @@ const cssParser = createParser(
     },
 
     /* ----------------------------- Declarations ----------------------------- */
-    DECLARATIONS_GROUP() {
+    DECLARATIONS_GROUP(): Grammar<any[]> {
       return and([
         consume(LCurly),
-        zeroOrMany(rule(this.DECLARATION)),
+        zeroOrMany(or([
+          rule(this.DECLARATION),
+          rule(this.AT_RULE),
+          rule(this.RULESET),
+        ])),
         consume(RCurly),
       ], ([, declarations]) => declarations);
     },
@@ -288,54 +373,105 @@ const cssParser = createParser(
 
     /* --------------------------------- Value -------------------------------- */
     VALUE(): Grammar<any> {
+      return and([
+        rule(this.VALUE_SEQUENCE),
+        zeroOrMany(and([
+          consume(Comma),
+          rule(this.VALUE_SEQUENCE),
+        ])),
+      ], ([first, rest]) =>
+        rest.reduce(
+          (values, [, next]) => values.concat(",", next),
+          first,
+        ));
+    },
+
+    VALUE_SEQUENCE(): Grammar<any[]> {
       return oneOrManySep(
-        or([
-          rule(this.VARIABLE),
-          consume(Hex),
-          and([
-            consume(NumberLiteral, Number),
-            consume(CSSTime),
-          ], ([value, unit]) => ({
-            type: "time",
-            value,
-            unit,
-          })),
-          and([
-            consume(NumberLiteral, Number),
-            zeroOrOne(consume(CSSUnits)),
-          ], ([value, unit]) => ({
-            type: "size",
-            value,
-            unit,
-          })),
-          rule(this.FUNCTION),
-          and([
-            consume(QuoteDouble),
-            consumeUntil(QuoteDouble),
-            consume(QuoteDouble),
-          ], ([, value]) => ({
-            type: "text",
-            value: (value || []).join(""),
-          })),
-          and([
-            consume(QuoteSingle),
-            consumeUntil(QuoteSingle),
-            consume(QuoteSingle),
-          ], ([, value]) => ({
-            type: "text",
-            value: (value || []).join(""),
-          })),
-          consume(StringLiteral),
-        ]),
-        consume(Whitespace),
+        rule(this.VALUE_COMPONENT),
+        or([consume(Whitespace), consume(LineBreak), consume(Comment)]),
       );
+    },
+
+    VALUE_COMPONENT(): Grammar<any> {
+      return or([
+        rule(this.VARIABLE),
+        consume(Hex),
+        consume(Url, parseUrl),
+        and([
+          consume(NumberLiteral, Number),
+          consume(CSSTime),
+        ], ([value, unit]) => ({
+          type: "time",
+          value,
+          unit,
+        })),
+        and([
+          consume(NumberLiteral, Number),
+          consume(CSSUnits),
+        ], ([value, unit]) => ({
+          type: "size",
+          value,
+          unit,
+        })),
+        and([
+          consume(NumberLiteral, Number),
+          consume(StringLiteral),
+        ], ([value, unit]) => ({
+          type: "dimension",
+          value,
+          unit,
+        })),
+        consume(NumberLiteral, (value) => ({
+          type: "size",
+          value: Number(value),
+          unit: undefined,
+        })),
+        rule(this.FUNCTION),
+        consume(StringDouble, (value) => ({
+          type: "text",
+          value: decodeCssString(value),
+        })),
+        consume(StringSingle, (value) => ({
+          type: "text",
+          value: decodeCssString(value),
+        })),
+        and([
+          consume(QuoteDouble),
+          consumeUntil(QuoteDouble),
+          consume(QuoteDouble),
+        ], ([, value]) => ({
+          type: "text",
+          value: (value || []).join(""),
+        })),
+        and([
+          consume(QuoteSingle),
+          consumeUntil(QuoteSingle),
+          consume(QuoteSingle),
+        ], ([, value]) => ({
+          type: "text",
+          value: (value || []).join(""),
+        })),
+        consume(StringLiteral),
+        or([
+          consume(Slash),
+          consume(Plus),
+          consume(Minus),
+          consume(Star),
+          consume(Dot),
+          consume(Colon),
+          consume(Question),
+          consume(Ampersand),
+          consume(Equal),
+        ]),
+      ]);
     },
 
     FUNCTION() {
       return and([
         consume(StringLiteral),
         consume(LParen),
-        zeroOrManySep(rule(this.VALUE), consume(Comma)),
+        zeroOrManySep(rule(this.VALUE_SEQUENCE), consume(Comma)),
         consume(RParen),
       ], ([name, , value]) => ({
         type: "fn",
@@ -345,14 +481,20 @@ const cssParser = createParser(
     },
 
     VARIABLE(): Grammar<any> {
-      return and([
-        consume(Minus),
-        consume(Minus),
-        consume(StringLiteral),
-      ], ([, , name]) => ({
-        type: "variable",
-        name,
-      }));
+      return or([
+        consume(CustomProperty, (name) => ({
+          type: "variable",
+          name: name.slice(2),
+        })),
+        and([
+          consume(Minus),
+          consume(Minus),
+          consume(StringLiteral),
+        ], ([, , name]) => ({
+          type: "variable",
+          name,
+        })),
+      ]);
     },
 
     /* -------------------------------- Selectors ----------------------------- */
@@ -430,6 +572,10 @@ const cssParser = createParser(
           type: "selector",
           scope: "all",
         })),
+        consume(Ampersand, () => ({
+          type: "selector",
+          scope: "nesting",
+        })),
       ]);
     },
 
@@ -447,6 +593,8 @@ const cssParser = createParser(
           ])),
           consume(Equal),
           or([
+            consume(StringDouble, decodeCssString),
+            consume(StringSingle, decodeCssString),
             and([
               consume(QuoteDouble),
               consumeUntil(QuoteDouble),
@@ -482,16 +630,30 @@ const cssParser = createParser(
         consume(StringLiteral),
         zeroOrOne(and([
           consume(LParen),
-          zeroOrOne(rule(this.VALUE)),
+          rule(this.PSEUDO_ARGUMENT),
           consume(RParen),
         ])),
       ], ([, double, name, value]) => ({
         type: "selector",
         scope: "pseudo",
         name,
-        value: value?.[1],
+        value: value?.[1] || undefined,
         double: !!double,
       }));
+    },
+
+    PSEUDO_ARGUMENT(): Grammar<string> {
+      return zeroOrMany(or([
+        and([
+          consume(LParen),
+          rule(this.PSEUDO_ARGUMENT),
+          consume(RParen),
+        ], ([, value]) => `(${value})`),
+        and([
+          not(peek(consume(RParen))),
+          consumeAny(),
+        ], ([, value]) => value),
+      ]), (parts) => parts.join("").trim());
     },
 
     SELECTOR_TAG() {
@@ -503,14 +665,21 @@ const cssParser = createParser(
     },
 
     SELECTOR_ID() {
-      return and([
-        consume(Hash),
-        consume(StringLiteral),
-      ], ([, name]) => ({
-        type: "selector",
-        scope: "id",
-        name,
-      }));
+      return or([
+        and([
+          consume(Hash),
+          consume(StringLiteral),
+        ], ([, name]) => ({
+          type: "selector",
+          scope: "id",
+          name,
+        })),
+        consume(Hex, (name) => ({
+          type: "selector",
+          scope: "id",
+          name: name.slice(1),
+        })),
+      ]);
     },
 
     SELECTOR_CLASS() {
@@ -532,8 +701,8 @@ const cssParser = createParser(
       ], ([program]) => program);
     },
   },
-  // Global skip rule: whitespace & line breaks
-  () => or([consume(LineBreak), consume(Whitespace)]),
+  // Global skip rule: comments, whitespace, and line breaks
+  () => or([consume(Comment), consume(LineBreak), consume(Whitespace)]),
 );
 
 /* -------------------------------------------------------------------------- */

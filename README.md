@@ -23,6 +23,7 @@ import {
   createToken,
   createParser,
   consume,
+  consumeAny,
   consumeUntil,
   consumeBehind,
   and,
@@ -156,6 +157,9 @@ Lazy reference to another rule (supports forward / mutual recursion). Always wra
 - `consume(token, transform?)`
   Consume the next matching token. Optional transform maps the raw string to another value.
 
+- `consumeAny(transform?)`
+  Consume the next non-empty tokenizer chunk without testing its token type. It preserves whitespace and other trivia, making it useful inside recursive raw-text grammars.
+
 - `consumeBehind(token, transform?)`
   Attempt to match a token immediately behind the current position (useful for context-sensitive checks).
 
@@ -228,6 +232,15 @@ Skip rules are re-applied between token consumptions and must always consume at 
 - Template / macro engines
 - Lightweight interpreters or transpilers
 - Structured command parsers (CLI-style grammars)
+
+## Complete CSS Example
+
+[`tests/css.ts`](tests/css.ts) is a complete CSS grammar covering rulesets, modern selectors and nesting, declarations, component values and functions, custom properties, comments, media queries, keyframes, and generic at-rules.
+
+```sh
+deno test --allow-import tests/css.test.ts
+deno bench tests/css.bench.ts
+```
 
 ## Additional Patterns
 
