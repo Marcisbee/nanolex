@@ -3,18 +3,19 @@ name: Publish
 on:
   release:
     types: [created]
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v6
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - uses: actions/setup-node@v1
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
       - run: npm ci
       - run: npm run build
       - run: npm run lint
@@ -26,18 +27,17 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v1
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org/
       - run: npm ci
       - run: npm run build
       - run: npm publish --provenance --access public ./dist
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}
 
   publish-jsr:
+    if: github.event_name == 'release'
     needs: test
     runs-on: ubuntu-latest
     permissions:
