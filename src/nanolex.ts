@@ -263,14 +263,22 @@ export function and(
 ): Grammar<any> {
   return (ctx) => {
     const startPos = ctx.pos;
-    const values: any[] = [];
-    for (const rule of rules) {
-      const [vOrPos, tokenOrNull] = rule(ctx);
-      if (tokenOrNull !== null) {
+    // Most alternatives fail on their first rule. Avoid allocating their
+    // value array, and forward failures without allocating another tuple.
+    if (rules.length === 0) return [transform ? transform([]) : [], null];
+    const first = rules[0](ctx);
+    if (first[1] !== null) {
+      ctx.pos = startPos;
+      return first;
+    }
+    const values: any[] = [first[0]];
+    for (let i = 1; i < rules.length; i++) {
+      const result = rules[i](ctx);
+      if (result[1] !== null) {
         ctx.pos = startPos;
-        return [vOrPos as number, tokenOrNull];
+        return result;
       }
-      values.push(vOrPos);
+      values.push(result[0]);
     }
     return [transform ? transform(values) : values, null];
   };
@@ -490,7 +498,7 @@ export function or(
     for (const rule of rules) {
       const res = rule(ctx);
       if (res[1] === null) {
-        return [transform ? transform(res[0]) : res[0], null];
+        return transform ? [transform(res[0]), null] : res;
       }
       lastError = res as [number, Token];
       ctx.pos = startPos;
@@ -670,7 +678,7 @@ export function zeroOrOne(
     const startPos = ctx.pos;
     const res = rule(ctx);
     if (res[1] === null) {
-      return [transform ? transform(res[0]) : res[0], null];
+      return transform ? [transform(res[0]), null] : res;
     }
     ctx.pos = startPos;
     return [undefined, null];

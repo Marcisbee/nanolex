@@ -92,3 +92,20 @@ tree, precedence, modern syntax, documentation fields, source fidelity and
 malformed inputs. Package releases are finite regression fixtures, not proof of
 perfection for all future TypeScript syntax. Update the pinned corpus and extend
 the grammar when a new declaration construct appears.
+
+## Performance checks
+
+Run `npm run bench:typescript` for warmed, parse-only medians over the same
+pinned corpus used by the correctness tests. File discovery and reads happen
+before timing. The corpus uses 3 warmups and 10 measured runs; DOM, React and
+Vue runtime-core use 5 warmups and 20 runs each. Each JSON output row includes
+file count, input bytes, repeat counts and median milliseconds. Compare runs on
+the same machine and runtime without concurrent CPU-heavy work.
+
+The grammar uses single token matches for keyword sets and reuses child AST
+nodes when a precedence level has no operator. JSDoc avoids additional parser
+passes for text without a possible link or leading type annotation. Nanolex's
+sequence combinator skips value-array allocation when its first rule fails;
+alternatives and optional rules forward untransformed results without extra
+result tuples. These optimizations retain the combinator grammar and its
+backtracking behavior.

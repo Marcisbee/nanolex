@@ -11,6 +11,7 @@
     "lint": "deno lint",
     "declarations": "tsc --declarationDir dist --emitDeclarationOnly --declaration",
     "postbuild": "cat package.json | sed '/\\\"devDependencies\\\"/,/}/ d; /^$/d' | sed 's/\\.\\/dist\\//\\.\\//g' > ./dist/package.json && cp README.md dist && cp LICENSE dist",
+    "bench:typescript": "deno run --allow-read tests/typescript.benchmark.ts",
     "test:typescript": "deno test --allow-read --allow-env tests/typescript.test.ts tests/typescript.corpus.test.ts"
   },
   "repository": {

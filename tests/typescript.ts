@@ -127,7 +127,7 @@ const docParser = createParser([docFence, docLink, docTag], {
   },
 });
 function jsdocLinks(text: string): JSDocLink[] {
-  return docParser("LINKS", text);
+  return text.includes("{@") ? docParser("LINKS", text) : [];
 }
 
 const docOpen = createToken("{");
@@ -170,7 +170,9 @@ export function parseJSDoc(raw: string, start = 0): JSDoc {
     .split("\n").map((line) => line.replace(/^\s*\* ?/, "")).join("\n").trim();
   const { description, tags } = docParser("DOCUMENT", text);
   for (const tag of tags) {
-    let { type, tail } = annotationParser("ANNOTATION", tag.text);
+    let { type, tail } = tag.text.startsWith("{")
+      ? annotationParser("ANNOTATION", tag.text)
+      : { type: undefined, tail: tag.text };
     if (type !== undefined) tag.type = type;
     if (
       [
@@ -383,7 +385,14 @@ function text(value: string): Grammar<string> {
   }
   return grammar;
 }
-const either = (...values: string[]) => or(values.map(text));
+// One token test for a keyword/punctuation set, rather than a failed parser
+// invocation and result tuple for every preceding alternative.
+const either = (...values: string[]) =>
+  consume(createToken(
+    new RegExp(
+      `(?:${values.map((value) => createToken(value).source).join("|")})`,
+    ),
+  ));
 function condition(
   name: string,
   test: (ctx: Context) => boolean,
@@ -414,27 +423,40 @@ type Shape = Partial<Omit<Node, "start" | "end">>;
 function located<T>(
   grammar: Grammar<T>,
   build: (value: T) => Shape,
+  kind = "",
 ): Grammar<Node> {
   return (ctx) => {
     const first = token(ctx);
     const result = grammar(ctx);
     if (result[1] !== null) return result;
+    const shape = build(result[0]);
+    // A precedence level with no operator returns its child unchanged.
+    if ("start" in shape && "end" in shape) {
+      const value = shape as Node;
+      return [
+        first.docs.length && first.docs !== value.docs
+          ? { ...value, docs: first.docs }
+          : value,
+        null,
+      ];
+    }
     const last = token(ctx, Math.max(0, ctx.pos - 1));
-    return [{
-      kind: "",
+    const value: Node = {
+      kind,
       children: [],
       start: first.start,
       end: last.end,
-      ...build(result[0]),
-      ...(first.docs.length ? { docs: first.docs } : {}),
-    }, null];
+      ...shape,
+    };
+    if (first.docs.length) value.docs = first.docs;
+    return [value, null];
   };
 }
 const node = <T>(
   kind: string,
   grammar: Grammar<T>,
   build: (value: T) => Shape = () => ({}),
-) => located(grammar, (value) => ({ kind, ...build(value) }));
+) => located(grammar, build, kind);
 const named = (grammar: Grammar<string>) =>
   node("Name", grammar, (name) => ({ name }));
 const id = named(identifierToken);

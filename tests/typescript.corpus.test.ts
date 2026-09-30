@@ -1,37 +1,12 @@
 import { strict as assert } from "node:assert";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 import ts from "typescript-reference";
+import { declarationFiles, declarationRoots } from "./typescript.fixtures.ts";
 import { type Node, parseDeclarations } from "./typescript.ts";
 
-function files(path: string): string[] {
-  return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
-    const name = join(path, entry.name);
-    return entry.isDirectory()
-      ? files(name)
-      : /\.d\.[cm]?ts$/.test(name)
-      ? [name]
-      : [];
-  });
-}
-const roots = [
-  "typescript",
-  "typescript-reference",
-  "typescript-current",
-  "@types/react",
-  "@types/node",
-  "@babel",
-  "exome",
-  "vue",
-  "@vue",
-  "csstype",
-];
-for (const root of roots) {
+for (const root of declarationRoots) {
   Deno.test(`declaration corpus: ${root}`, () => {
-    const paths = files(
-      fileURLToPath(new URL(`../node_modules/${root}`, import.meta.url)),
-    );
+    const paths = declarationFiles(root);
     assert(paths.length > 0, `Missing corpus ${root}; run npm ci`);
     const failures: string[] = [];
     let count = 0;
