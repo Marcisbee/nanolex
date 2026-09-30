@@ -162,9 +162,12 @@ Deno.test("invalid declarations fail instead of becoming opaque balanced text", 
       "type X = { [K in ]: T };",
       "type X = Foo<Bar;",
       "type X = [a: ];",
+      "type X = [, string];",
+      "declare function f(, x: string): void;",
       "declare function f(x: ): void;",
       "interface X { a: string b: number }",
       "interface X {",
+      "interface X extends {}",
       "type X = `abc${string;",
       "type X = 'unterminated;",
       "/** unterminated",
@@ -244,4 +247,12 @@ Deno.test("heritage supports mixin calls and parenthesized constructors", () => 
   assert.equal(all(tree, "ClassDeclaration").length, 2);
   assert.equal(all(tree, "CallExpression").length, 1);
   assert.equal(all(tree, "HeritageClause").length, 2);
+});
+
+Deno.test("ambient backtick initializers preserve literal text and spans", () => {
+  const source = "declare const version = `1.0`;";
+  const value = parseDeclarations(source).children[0].children[0].children[1];
+  assert.equal(value.kind, "TemplateExpression");
+  assert.equal(value.children[0].name, "`1.0`");
+  assert.equal(source.slice(value.start, value.end), "`1.0`");
 });

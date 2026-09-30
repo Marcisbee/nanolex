@@ -1,9 +1,21 @@
 # Declaration grammar exercise
 
-`typescript.ts` implements a declaration-file parser using Nanolex's
-`createSourceParser`, `SourceCursor`, and reusable `sourcePattern` grammars.
-Like the CSS and Markdown exercises, it lives under `tests/`; it is not a
-Nanolex package export and does not import the TypeScript compiler.
+`typescript.ts` expresses declaration, type, member, expression and JSDoc
+productions with Nanolex's `and`, `or`, `rule`, `peek`, `not`, repetition,
+optional rules and AST transforms. There is no recursive-descent declaration
+parser or TypeScript compiler dependency.
+
+A separate lexer uses `SourceCursor` and `sourcePattern` to preserve trivia,
+Unicode offsets, line breaks and context-sensitive template token boundaries.
+The `SOURCE` entry rule adapts those lexemes to Nanolex's `Context`; small
+terminal predicates read token categories and line breaks, and a span wrapper
+attaches source metadata. These adapters do not recognize declarations or
+recursive types. Expression precedence is composed from grammar rules and AST
+folds. Conditional-type contexts use separate recursive rules, without mutable
+grammar flags. JSDoc uses combinator grammars for tags, links and balanced type
+annotations, followed by field normalization. Like the CSS and Markdown
+exercises, it lives under `tests/`; it is not a Nanolex package export and does
+not import the TypeScript compiler.
 
 ```ts
 import { parseDeclarations } from "./typescript.ts";

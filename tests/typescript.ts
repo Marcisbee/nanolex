@@ -1,8 +1,22 @@
 /** Test-only declaration grammar. See typescript.md for sources and scope. */
 import {
-  createSourceParser,
-  type SourceCursor,
+  and,
+  consume,
+  consumeAny,
+  type Context,
+  createParser,
+  createToken,
+  EOF,
+  type Grammar,
+  not,
+  oneOrManySep,
+  or,
+  peek,
+  rule,
+  SourceCursor,
   sourcePattern,
+  zeroOrMany,
+  zeroOrOne,
 } from "../src/nanolex.ts";
 
 export interface Node {
@@ -68,81 +82,96 @@ class ParseFailure extends Error {
   }
 }
 
+const docLink = createToken(
+  /\{@(?:link|linkcode|linkplain)\s+[^}]+\}/,
+  "JSDoc link",
+);
+const docTag = createToken(/(?:^|[ \t\n])@[\w-]+\b[ \t]*/, "JSDoc tag");
+const docFence = createToken(/```[\s\S]*?(?:```|$)/, "JSDoc fenced example");
+const docParser = createParser([docFence, docLink, docTag], {
+  PROSE(): Grammar<string> {
+    return zeroOrMany(
+      and([not(consume(docTag)), consumeAny()], ([, value]) => value),
+      (parts) => parts.join(""),
+    );
+  },
+  DOCUMENT(): Grammar<{ description: string; tags: JSDocTag[] }> {
+    return and([
+      rule(this.PROSE),
+      zeroOrMany(and([consume(docTag), rule(this.PROSE)], ([marker, text]) => ({
+        name: marker.trim().slice(1).trim(),
+        text: text.trim(),
+        links: jsdocLinks(text),
+      }))),
+    ], ([description, tags]) => ({ description: description.trim(), tags }));
+  },
+  LINKS(): Grammar<JSDocLink[]> {
+    return zeroOrMany(
+      or([
+        consume(docLink, (raw): JSDocLink => {
+          const match =
+            /^\{@(link|linkcode|linkplain)\s+([^\s|}]+)(?:\s*\|?\s*([^}]*))?\}$/
+              .exec(raw)!;
+          return {
+            kind: match[1] as JSDocLink["kind"],
+            target: match[2],
+            label: match[3] ?? "",
+            raw,
+          };
+        }),
+        and([consumeAny()], () => undefined),
+      ]),
+      (links) =>
+        links.filter((value): value is JSDocLink => value !== undefined),
+    );
+  },
+});
 function jsdocLinks(text: string): JSDocLink[] {
-  return [
-    ...text.matchAll(
-      /\{@(link|linkcode|linkplain)\s+([^\s|}]+)(?:\s*\|?\s*([^}]*))?\}/g,
-    ),
-  ]
-    .map((match) => ({
-      kind: match[1] as JSDocLink["kind"],
-      target: match[2],
-      label: match[3] ?? "",
-      raw: match[0],
-    }));
+  return docParser("LINKS", text);
 }
+
+const docOpen = createToken("{");
+const docClose = createToken("}");
+const docQuoted = createToken(
+  /"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`/,
+);
+const docEscape = createToken(/\\[\s\S]/);
+const annotationParser = createParser(
+  [docQuoted, docEscape, docOpen, docClose],
+  {
+    BRACED(): Grammar<string> {
+      return and([
+        consume(docOpen),
+        zeroOrMany(
+          or([
+            rule(this.BRACED),
+            and(
+              [not(or([consume(docOpen), consume(docClose)])), consumeAny()],
+              ([, value]) => value,
+            ),
+          ]),
+          (parts) => parts.join(""),
+        ),
+        consume(docClose),
+      ], ([open, body, close]) => open + body + close);
+    },
+    ANNOTATION(): Grammar<{ type?: string; tail: string }> {
+      return and([
+        zeroOrOne(rule(this.BRACED)),
+        zeroOrMany(consumeAny(), (parts) => parts.join("")),
+      ], ([type, tail]) => ({ type: type?.slice(1, -1), tail: tail.trim() }));
+    },
+  },
+);
 
 /** Unknown tags and all original comment text are deliberately retained. */
 export function parseJSDoc(raw: string, start = 0): JSDoc {
   const text = raw.slice(3, -2).replace(/\r\n?/g, "\n")
     .split("\n").map((line) => line.replace(/^\s*\* ?/, "")).join("\n").trim();
-  const tags: JSDocTag[] = [];
-  const description: string[] = [];
-  let fence = false;
-  for (const line of text.split("\n")) {
-    if (/^\s*```/.test(line)) fence = !fence;
-    // Tags may share a line. Inline {@link ...} is prose, not a block tag.
-    const matches = fence
-      ? []
-      : [...line.matchAll(/(?:^|\s)@([\w-]+)\b[ \t]*/g)];
-    const append = (value: string) => {
-      if (tags.length) tags[tags.length - 1].text += `\n${value}`;
-      else description.push(value);
-    };
-    if (!matches.length) append(line);
-    else {
-      const before = line.slice(0, matches[0].index).trimEnd();
-      if (before) append(before);
-      matches.forEach((match, i) =>
-        tags.push({
-          name: match[1],
-          links: [],
-          text: line.slice(
-            match.index! + match[0].length,
-            matches[i + 1]?.index ?? line.length,
-          ),
-        })
-      );
-    }
-  }
+  const { description, tags } = docParser("DOCUMENT", text);
   for (const tag of tags) {
-    tag.text = tag.text.trim();
-    tag.links = jsdocLinks(tag.text);
-    let tail = tag.text;
-    if (tail.startsWith("{")) {
-      let depth = 0, quote = "", end = 0;
-      for (; end < tail.length; end++) {
-        const c = tail[end];
-        if (c === "\\") {
-          end++;
-          continue;
-        }
-        if (quote) {
-          if (c === quote) quote = "";
-          continue;
-        }
-        if (c === '"' || c === "'" || c === "`") {
-          quote = c;
-          continue;
-        }
-        if (c === "{") depth++;
-        if (c === "}" && --depth === 0) break;
-      }
-      if (end < tail.length) {
-        tag.type = tail.slice(1, end);
-        tail = tail.slice(end + 1).trim();
-      }
-    }
+    let { type, tail } = annotationParser("ANNOTATION", tag.text);
+    if (type !== undefined) tag.type = type;
     if (
       [
         "param",
@@ -173,13 +202,12 @@ export function parseJSDoc(raw: string, start = 0): JSDoc {
     }
     tag.description = tail.replace(/^-\s*/, "");
   }
-  const summary = description.join("\n").trim();
   return {
     start,
     end: start + raw.length,
     raw,
-    description: summary,
-    links: jsdocLinks(summary),
+    description,
+    links: jsdocLinks(description),
     tags,
   };
 }
@@ -339,872 +367,1304 @@ function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
   return { tokens, comments };
 }
 
-class DeclarationGrammar {
-  pos = 0;
-  disallowConditional = false;
-  constructor(readonly tokens: Lexeme[]) {}
-  get token(): Lexeme {
-    return this.tokens[this.pos];
+// The lexer owns lexical context (comments, template boundaries and line breaks).
+// All syntactic choice, sequencing, recursion and repetition below use Nanolex.
+interface DeclarationContext extends Context {
+  lexemes: Lexeme[];
+}
+const token = (ctx: Context, pos = ctx.pos) =>
+  (ctx as DeclarationContext).lexemes[pos];
+const literals = new Map<string, Grammar<string>>();
+function text(value: string): Grammar<string> {
+  let grammar = literals.get(value);
+  if (!grammar) {
+    grammar = consume(createToken(value));
+    literals.set(value, grammar);
   }
-  at(text: string): boolean {
-    return this.token.text === text;
-  }
-  next(text: string): boolean {
-    return this.tokens[this.pos + 1]?.text === text;
-  }
-  take(text: string): boolean {
-    if (!this.at(text)) return false;
-    this.pos++;
-    return true;
-  }
-  expect(text: string): void {
-    if (!this.take(text)) this.fail(JSON.stringify(text));
-  }
-  fail(expected: string): never {
-    throw new ParseFailure(this.token.start, expected);
-  }
-  node(
-    kind: string,
-    start: number,
-    children: Node[] = [],
-    fields: Partial<Node> = {},
-  ): Node {
-    return {
-      kind,
-      start: this.tokens[start].start,
-      end: this.tokens[Math.max(start, this.pos - 1)].end,
-      children,
-      ...fields,
-      ...(this.tokens[start].docs.length
-        ? { docs: this.tokens[start].docs }
-        : {}),
-    };
-  }
-  name(): Node {
-    const start = this.pos;
-    if (!["identifier", "string", "number"].includes(this.token.kind)) {
-      this.fail("name");
-    }
-    const name = this.token.text;
-    this.pos++;
-    return this.node("Name", start, [], { name });
-  }
-  id(): Node {
-    if (this.token.kind !== "identifier") this.fail("identifier");
-    return this.name();
-  }
-  qualified(): Node {
-    const start = this.pos, parts = [this.id()];
-    while (this.take(".")) parts.push(this.id());
-    return this.node("QualifiedName", start, parts, {
-      name: parts.map((p) => p.name).join("."),
-    });
-  }
-  semi(): void {
-    if (this.take(";")) return;
-    if (this.at("}") || this.token.kind === "eof" || this.token.newline) return;
-    this.fail("semicolon or line break");
-  }
-  list(close: string, parse: () => Node): Node[] {
-    const items: Node[] = [];
-    while (!this.at(close)) {
-      items.push(parse());
-      if (!this.take(",")) break;
-    }
-    this.expect(close);
-    return items;
-  }
-  typeParameters(): Node[] {
-    if (!this.take("<")) return [];
-    return this.list(">", () => {
-      const start = this.pos, modifiers: string[] = [];
-      while (
-        ["const", "in", "out"].includes(this.token.text) &&
-        this.tokens[this.pos + 1]?.kind === "identifier"
-      ) modifiers.push(this.tokens[this.pos++].text);
-      const name = this.id(), children = [name];
-      if (this.take("extends")) {
-        children.push(this.node("Constraint", this.pos, [this.type()]));
-      }
-      if (this.take("=")) {
-        children.push(this.node("DefaultType", this.pos, [this.type()]));
-      }
-      return this.node("TypeParameter", start, children, {
-        name: name.name,
-        modifiers,
-      });
-    });
-  }
-  typeArguments(): Node[] {
-    if (!this.take("<")) return [];
-    return this.list(">", () => this.type());
-  }
-  parameters(): Node[] {
-    this.expect("(");
-    return this.list(")", () => {
-      const start = this.pos, modifiers: string[] = [];
-      while (
-        ["public", "private", "protected", "readonly", "override"].includes(
-          this.token.text,
-        ) && this.tokens[this.pos + 1]?.kind === "identifier"
-      ) modifiers.push(this.tokens[this.pos++].text);
-      const rest = this.take("..."),
-        name = this.binding(),
-        optional = this.take("?"),
-        children = [name];
-      if (this.take(":")) children.push(this.type());
-      return this.node("Parameter", start, children, {
-        name: name.name,
-        optional,
-        rest,
-        modifiers,
-      });
-    });
-  }
-  binding(): Node {
-    const start = this.pos;
-    if (this.take("{")) {
-      return this.node(
-        "ObjectBinding",
-        start,
-        this.list("}", () => {
-          const s = this.pos, rest = this.take("..."), name = this.name();
-          return this.node(
-            "BindingElement",
-            s,
-            this.take(":") ? [name, this.binding()] : [name],
-            { rest },
-          );
-        }),
-      );
-    }
-    if (this.take("[")) {
-      const children: Node[] = [];
-      while (!this.take("]")) {
-        if (this.take(",")) {
-          children.push(this.node("OmittedBinding", this.pos - 1));
-          continue;
-        }
-        const s = this.pos, rest = this.take("...");
-        children.push(
-          this.node("BindingElement", s, [this.binding()], { rest }),
-        );
-        if (!this.take(",")) {
-          this.expect("]");
-          break;
-        }
-      }
-      return this.node("ArrayBinding", start, children);
-    }
-    return this.id();
-  }
-  type(conditional = true): Node {
-    const previous = this.disallowConditional;
-    this.disallowConditional = !conditional;
-    try {
-      const start = this.pos;
-      let left = this.union();
-      if (conditional && !this.token.newline && this.take("extends")) {
-        const constraint = this.type(false);
-        this.expect("?");
-        const yes = this.type();
-        this.expect(":");
-        left = this.node("ConditionalType", start, [
-          left,
-          constraint,
-          yes,
-          this.type(),
-        ]);
-      }
-      return left;
-    } finally {
-      this.disallowConditional = previous;
-    }
-  }
-  union(): Node {
-    const start = this.pos;
-    this.take("|");
-    const types = [this.intersection()];
-    while (this.take("|")) types.push(this.intersection());
-    return types.length === 1 ? types[0] : this.node("UnionType", start, types);
-  }
-  intersection(): Node {
-    const start = this.pos;
-    this.take("&");
-    const types = [this.prefixType()];
-    while (this.take("&")) types.push(this.prefixType());
-    return types.length === 1
-      ? types[0]
-      : this.node("IntersectionType", start, types);
-  }
-  prefixType(): Node {
-    const start = this.pos;
-    if (["keyof", "readonly", "unique"].includes(this.token.text)) {
-      const operator = this.tokens[this.pos++].text;
-      return this.node("TypeOperator", start, [this.prefixType()], {
-        operator,
-      });
-    }
-    if (this.take("infer")) {
-      const children = [this.id()];
-      if (this.at("extends")) {
-        const checkpoint = this.pos;
-        this.pos++;
-        const constraint = this.type(false);
-        if (this.at("?") && !this.disallowConditional) this.pos = checkpoint;
-        else children.push(constraint);
-      }
-      return this.node("InferType", start, children);
-    }
-    if (this.take("asserts")) {
-      const children = [this.id()];
-      if (this.take("is")) children.push(this.type());
-      return this.node("TypePredicate", start, children, {
+  return grammar;
+}
+const either = (...values: string[]) => or(values.map(text));
+function condition(
+  name: string,
+  test: (ctx: Context) => boolean,
+): Grammar<null> {
+  const expected = createToken(name);
+  return (ctx) => test(ctx) ? [null, null] : [ctx.pos, expected];
+}
+function category(kind: string): Grammar<string> {
+  return and([
+    condition(kind, (ctx) => token(ctx).kind === kind),
+    consume(createToken(/[\s\S]+/, kind)),
+  ], ([, value]) => value);
+}
+const sameLine = condition("no line break", (ctx) => !token(ctx).newline);
+const lineBreak = condition("line break", (ctx) => token(ctx).newline);
+const identifierToken = category("identifier");
+const stringToken = category("string");
+const numberToken = category("number");
+const semicolon = or([
+  text(";"),
+  peek(text("}")),
+  peek(consume(EOF)),
+  lineBreak,
+]);
+const present = <T>(value: T | undefined): T[] =>
+  value === undefined ? [] : [value];
+type Shape = Partial<Omit<Node, "start" | "end">>;
+function located<T>(
+  grammar: Grammar<T>,
+  build: (value: T) => Shape,
+): Grammar<Node> {
+  return (ctx) => {
+    const first = token(ctx);
+    const result = grammar(ctx);
+    if (result[1] !== null) return result;
+    const last = token(ctx, Math.max(0, ctx.pos - 1));
+    return [{
+      kind: "",
+      children: [],
+      start: first.start,
+      end: last.end,
+      ...build(result[0]),
+      ...(first.docs.length ? { docs: first.docs } : {}),
+    }, null];
+  };
+}
+const node = <T>(
+  kind: string,
+  grammar: Grammar<T>,
+  build: (value: T) => Shape = () => ({}),
+) => located(grammar, (value) => ({ kind, ...build(value) }));
+const named = (grammar: Grammar<string>) =>
+  node("Name", grammar, (name) => ({ name }));
+const id = named(identifierToken);
+const name = named(or([identifierToken, stringToken, numberToken]));
+const moduleName = named(stringToken);
+function after<T>(prefix: string, grammar: Grammar<T>): Grammar<T> {
+  return and([text(prefix), grammar], ([, value]) => value);
+}
+function between<T>(
+  open: string,
+  grammar: Grammar<T>,
+  close: string,
+): Grammar<T> {
+  return and([text(open), grammar, text(close)], ([, value]) => value);
+}
+// A list may be empty and have one trailing comma, but not an empty element.
+function list<T>(grammar: Grammar<T>, close: string): Grammar<T[]> {
+  return and([
+    zeroOrOne(
+      and(
+        [grammar, zeroOrMany(after(",", grammar)), zeroOrOne(text(","))],
+        ([first, rest]) => [first, ...rest],
+      ),
+    ),
+    text(close),
+  ], ([items]) => items ?? []);
+}
+function modifiers(
+  values: string[],
+  following: Grammar<unknown>,
+): Grammar<string[]> {
+  return zeroOrMany(
+    and([either(...values), peek(following)], ([value]) => value),
+  );
+}
+function extend(
+  left: Node,
+  kind: string,
+  children: Node[],
+  end: number,
+  fields: Shape = {},
+): Node {
+  return {
+    kind,
+    start: left.start,
+    end,
+    children,
+    ...(left.docs ? { docs: left.docs } : {}),
+    ...fields,
+  };
+}
+const memberModifiers = [
+  "public",
+  "private",
+  "protected",
+  "static",
+  "abstract",
+  "readonly",
+  "override",
+  "declare",
+  "accessor",
+];
+const parameterModifiers = [
+  "public",
+  "private",
+  "protected",
+  "readonly",
+  "override",
+];
+const memberNameFollower = not(either("(", "<", ":", "?", ";", "}", ",", "="));
+
+function unionGrammar(conditional: boolean): Grammar<Node> {
+  return located(
+    and([
+      zeroOrOne(text("|")),
+      intersectionGrammar(conditional),
+      zeroOrMany(after("|", intersectionGrammar(conditional))),
+    ]),
+    ([, first, rest]) =>
+      rest.length ? { kind: "UnionType", children: [first, ...rest] } : first,
+  );
+}
+function intersectionGrammar(conditional: boolean): Grammar<Node> {
+  const prefix = rule(conditional ? grammar.PREFIX : grammar.CONSTRAINT_PREFIX);
+  return located(
+    and([
+      zeroOrOne(text("&")),
+      prefix,
+      zeroOrMany(after("&", prefix)),
+    ]),
+    ([, first, rest]) =>
+      rest.length
+        ? { kind: "IntersectionType", children: [first, ...rest] }
+        : first,
+  );
+}
+function prefixGrammar(conditional: boolean): Grammar<Node> {
+  const prefix = rule(conditional ? grammar.PREFIX : grammar.CONSTRAINT_PREFIX);
+  const inferConstraint = after("extends", rule(grammar.CONSTRAINT));
+  return or([
+    node(
+      "TypeOperator",
+      and([either("keyof", "readonly", "unique"), prefix]),
+      ([operator, value]) => ({ operator, children: [value] }),
+    ),
+    node(
+      "InferType",
+      and([
+        text("infer"),
+        id,
+        zeroOrOne(
+          conditional
+            ? and([inferConstraint, not(text("?"))], ([value]) => value)
+            : inferConstraint,
+        ),
+      ]),
+      ([, name, constraint]) => ({ children: [name, ...present(constraint)] }),
+    ),
+    node(
+      "TypePredicate",
+      and([text("asserts"), id, zeroOrOne(after("is", rule(grammar.TYPE)))]),
+      ([, name, value]) => ({
         operator: "asserts",
-      });
-    }
-    if (
-      (this.at("new") && (this.next("(") || this.next("<"))) ||
-      (this.at("abstract") && this.next("new"))
-    ) {
-      const modifiers = this.take("abstract") ? ["abstract"] : [];
-      this.expect("new");
-      const children = [...this.typeParameters(), ...this.parameters()];
-      this.expect("=>");
-      children.push(this.type());
-      return this.node("ConstructorType", start, children, { modifiers });
-    }
-    if (this.at("<") || this.at("(")) {
-      const checkpoint = this.pos;
-      try {
-        const children = [...this.typeParameters(), ...this.parameters()];
-        this.expect("=>");
-        children.push(this.type());
-        return this.node("FunctionType", start, children);
-      } catch (error) {
-        if (!(error instanceof ParseFailure)) throw error;
-        this.pos = checkpoint;
-      }
-    }
-    let result = this.primaryType();
-    while (!this.token.newline && this.take("[")) {
-      if (this.take("]")) result = this.node("ArrayType", start, [result]);
-      else {
-        const index = this.type();
-        this.expect("]");
-        result = this.node("IndexedAccessType", start, [result, index]);
-      }
-    }
-    if (!this.token.newline && this.take("is")) {
-      if (result.kind === "TypeReference" && result.children.length === 1) {
-        result = result.children[0];
-      }
-      result = this.node("TypePredicate", start, [result, this.type()], {
-        operator: "is",
-      });
-    }
-    return result;
-  }
-  primaryType(): Node {
-    const start = this.pos;
-    if (this.take("(")) {
-      const type = this.type();
-      this.expect(")");
-      return this.node("ParenthesizedType", start, [type]);
-    }
-    if (this.at("{")) return this.objectType();
-    if (this.take("[")) {
-      return this.node(
-        "TupleType",
-        start,
-        this.list("]", () => {
-          const s = this.pos, rest = this.take("...");
-          let name: Node | undefined;
-          if (
-            this.token.kind === "identifier" &&
-            (this.next(":") ||
-              (this.next("?") && this.tokens[this.pos + 2]?.text === ":"))
-          ) name = this.id();
-          let optional = name ? this.take("?") : false;
-          if (name) this.expect(":");
-          const value = this.type();
-          if (!name) optional = this.take("?");
-          return this.node("TupleElement", s, name ? [name, value] : [value], {
-            name: name?.name,
-            rest,
-            optional,
-          });
-        }),
-      );
-    }
-    if (this.take("typeof")) {
-      if (this.at("import")) {
-        const imported = this.importType();
-        return this.node("ImportType", start, imported.children, {
-          operator: "typeof",
-        });
-      }
-      return this.node("TypeQuery", start, [
-        this.qualified(),
-        ...this.typeArguments(),
-      ]);
-    }
-    if (this.at("import")) return this.importType();
-    if (this.token.kind.startsWith("template")) return this.templateType();
-    if (
-      ["string", "number"].includes(this.token.kind) ||
-      ["true", "false", "null"].includes(this.token.text)
-    ) {
-      const name = this.tokens[this.pos++].text;
-      return this.node("LiteralType", start, [], { name });
-    }
-    if (this.take("-")) {
-      if (this.token.kind !== "number") this.fail("numeric literal");
-      return this.node("LiteralType", start, [], {
-        name: `-${this.tokens[this.pos++].text}`,
-      });
-    }
-    if (
-      [
-        "any",
-        "unknown",
-        "never",
-        "void",
-        "undefined",
-        "string",
-        "number",
-        "boolean",
-        "bigint",
-        "symbol",
-        "object",
-        "this",
-        "intrinsic",
-      ].includes(this.token.text) && !this.next(".")
-    ) {
-      return this.node("KeywordType", start, [], {
-        name: this.tokens[this.pos++].text,
-      });
-    }
-    const name = this.qualified();
-    return this.node("TypeReference", start, [name, ...this.typeArguments()], {
-      name: name.name,
-    });
-  }
-  templateType(): Node {
-    const start = this.pos, children: Node[] = [];
-    let kind = this.token.kind;
-    children.push(
-      this.node("TemplateText", this.pos, [], {
-        name: this.tokens[this.pos++].text,
+        children: [name, ...present(value)],
       }),
-    );
-    if (kind !== "templateLiteral") {
-      do {
-        children.push(this.type());
-        kind = this.token.kind;
-        if (kind !== "templateMiddle" && kind !== "templateTail") {
-          this.fail("template continuation");
-        }
-        children.push(
-          this.node("TemplateText", this.pos, [], {
-            name: this.tokens[this.pos++].text,
-          }),
-        );
-      } while (kind !== "templateTail");
-    }
-    return this.node("TemplateLiteralType", start, children);
-  }
-  importType(): Node {
-    const start = this.pos;
-    this.expect("import");
-    this.expect("(");
-    if (this.tokens[this.pos].kind !== "string") this.fail("module string");
-    const children = [this.name()];
-    if (this.take(",")) children.push(this.attributesObject());
-    this.expect(")");
-    if (this.take(".")) children.push(this.qualified());
-    children.push(...this.typeArguments());
-    return this.node("ImportType", start, children);
-  }
-  attributesObject(): Node {
-    const start = this.pos;
-    this.expect("{");
-    const children = this.list("}", () => {
-      const s = this.pos, name = this.name();
-      this.expect(":");
-      const value = this.at("{") ? this.attributesObject() : this.name();
-      return this.node("ImportAttribute", s, [name, value]);
-    });
-    return this.node("ImportAttributes", start, children);
-  }
-  objectType(): Node {
-    const start = this.pos;
-    this.expect("{");
-    // Mapped types have a distinctive [name in Type] head, with optional polarity.
-    const checkpoint = this.pos;
-    let readonly = "";
-    if (this.take("+") || this.take("-")) {
-      readonly = this.tokens[this.pos - 1].text;
-      this.expect("readonly");
-      readonly += "readonly";
-    } else if (this.take("readonly")) readonly = "readonly";
-    if (
-      this.at("[") && this.tokens[this.pos + 1]?.kind === "identifier" &&
-      this.tokens[this.pos + 2]?.text === "in"
-    ) {
-      this.pos++;
-      const name = this.id();
-      this.expect("in");
-      const children = [name, this.type()];
-      if (this.take("as")) {
-        children.push(this.node("NameRemapping", this.pos, [this.type()]));
-      }
-      this.expect("]");
-      let optional = "";
-      if (this.take("+") || this.take("-")) {
-        optional = this.tokens[this.pos - 1].text;
-        this.expect("?");
-        optional += "?";
-      } else if (this.take("?")) optional = "?";
-      if (this.take(":")) children.push(this.type());
-      this.take(";");
-      this.expect("}");
-      return this.node("MappedType", start, children, {
-        modifiers: [readonly, optional].filter(Boolean),
-      });
-    }
-    this.pos = checkpoint;
-    const children = this.members();
-    this.expect("}");
-    return this.node("TypeLiteral", start, children);
-  }
-  members(classMember = false): Node[] {
-    const children: Node[] = [];
-    while (!this.at("}")) {
-      if (this.token.kind === "eof") this.fail("closing brace");
-      if (this.take(";")) continue;
-      children.push(this.member(classMember));
-      if (!this.take(",")) this.semi();
-    }
-    return children;
-  }
-  member(classMember = false): Node {
-    const start = this.pos, modifiers: string[] = [];
-    while (
+    ),
+    node(
+      "ConstructorType",
+      and([
+        zeroOrOne(text("abstract")),
+        text("new"),
+        rule(grammar.SIGNATURE),
+        text("=>"),
+        rule(grammar.TYPE),
+      ]),
+      ([abstract, , signature, , value]) => ({
+        modifiers: present(abstract),
+        children: [...signature, value],
+      }),
+    ),
+    node(
+      "FunctionType",
+      and([rule(grammar.SIGNATURE), text("=>"), rule(grammar.TYPE)]),
+      ([signature, , value]) => ({ children: [...signature, value] }),
+    ),
+    and(
       [
-        "public",
-        "private",
-        "protected",
-        "static",
-        "abstract",
-        "readonly",
-        "override",
-        "declare",
-        "accessor",
-      ].includes(this.token.text) &&
-      !["(", "<", ":", "?", ";", "}", ","].includes(
-        this.tokens[this.pos + 1]?.text,
-      )
-    ) modifiers.push(this.tokens[this.pos++].text);
-    if (
-      !classMember && (this.at("(") || this.at("<") ||
-        (this.at("new") && (this.next("(") || this.next("<"))))
-    ) {
-      const construct = this.take("new"),
-        children = [...this.typeParameters(), ...this.parameters()];
-      if (this.take(":")) children.push(this.type());
-      return this.node(
-        construct ? "ConstructSignature" : "CallSignature",
-        start,
-        children,
-        { modifiers },
-      );
-    }
-    if (
-      (this.at("get") || this.at("set")) &&
-      !["(", "<", ":", "?", ";", ",", "}", "="].includes(
-        this.tokens[this.pos + 1]?.text,
-      )
-    ) modifiers.push(this.tokens[this.pos++].text);
-    let name: Node;
-    if (this.take("[")) {
-      if (this.token.kind === "identifier" && this.next(":")) {
-        name = this.id();
-        this.expect(":");
-        const index = this.type();
-        this.expect("]");
-        this.expect(":");
-        return this.node("IndexSignature", start, [name, index, this.type()], {
-          modifiers,
-        });
-      }
-      const expr = this.expression();
-      this.expect("]");
-      name = this.node("ComputedName", start, [expr]);
-    } else if (this.take("#")) {
-      name = this.id();
-      name = this.node("PrivateName", start, [name], { name: `#${name.name}` });
-    } else name = this.name();
-    const optional = this.take("?");
-    const children = [name];
-    if (this.at("<") || this.at("(")) {
-      children.push(...this.typeParameters(), ...this.parameters());
-      if (this.take(":")) children.push(this.type());
-      return this.node(
-        classMember && name.name === "constructor"
-          ? "Constructor"
-          : modifiers.includes("get")
-          ? "GetAccessor"
-          : modifiers.includes("set")
-          ? "SetAccessor"
-          : "MethodSignature",
-        start,
-        children,
-        { name: name.name, modifiers, optional },
-      );
-    }
-    if (this.take(":")) children.push(this.type());
-    if (this.take("=")) children.push(this.expression());
-    return this.node("PropertySignature", start, children, {
-      name: name.name,
-      modifiers,
-      optional,
-    });
-  }
-  /** Constant expressions in enum/ambient initializers and computed names. */
-  expression(min = 0, heritage = false): Node {
-    const start = this.pos;
-    let left: Node;
-    if (["+", "-", "~", "!"].includes(this.token.text)) {
-      const operator = this.tokens[this.pos++].text;
-      left = this.node("UnaryExpression", start, [this.expression(12)], {
-        operator,
-      });
-    } else if (this.take("(")) {
-      left = this.expression(0, heritage);
-      this.expect(")");
-      left = this.node("ParenthesizedExpression", start, [left]);
-    } else left = this.name();
-    while (true) {
-      if (heritage && this.at("<")) {
-        left = this.node("ExpressionWithTypeArguments", start, [
-          left,
-          ...this.typeArguments(),
-        ]);
-        continue;
-      }
-      if (this.take("(")) {
-        const args = this.list(")", () => this.expression());
-        left = this.node("CallExpression", start, [left, ...args]);
-        continue;
-      }
-      if (this.take(".")) {
-        left = this.node("PropertyAccess", start, [left, this.id()]);
-        continue;
-      }
-      if (this.take("[")) {
-        const index = this.expression();
-        this.expect("]");
-        left = this.node("ElementAccess", start, [left, index]);
-        continue;
-      }
-      let operator = this.token.text, width = 1;
-      if (
-        (operator === "<" || operator === ">") && this.next(operator) &&
-        this.token.end === this.tokens[this.pos + 1].start
-      ) {
-        operator += operator;
-        width = 2;
-        if (operator === ">>" && this.tokens[this.pos + 2]?.text === ">") {
-          operator += ">";
-          width++;
-        }
-      }
-      const prec = ({
-        "||": 1,
-        "??": 1,
-        "&&": 2,
-        "|": 3,
-        "^": 4,
-        "&": 5,
-        "<<": 8,
-        ">>": 8,
-        ">>>": 8,
-        "+": 9,
-        "-": 9,
-        "*": 10,
-        "/": 10,
-        "%": 10,
-        "**": 11,
-      } as Record<string, number>)[operator];
-      if (prec === undefined || prec < min) break;
-      this.pos += width;
-      left = this.node("BinaryExpression", start, [
-        left,
-        this.expression(prec + (operator === "**" ? 0 : 1)),
-      ], { operator });
-    }
-    return left;
-  }
-  declarations(close = ""): Node[] {
-    const children: Node[] = [];
-    while (!this.at(close)) {
-      if (this.token.kind === "eof") this.fail(JSON.stringify(close));
-      children.push(this.declaration());
-    }
-    return children;
-  }
-  declaration(): Node {
-    const start = this.pos, modifiers: string[] = [];
-    if (this.take(";")) return this.node("EmptyDeclaration", start);
-    if (this.take("export")) {
-      modifiers.push("export");
-      if (this.take("=")) {
-        const value = this.expression();
-        this.semi();
-        return this.node("ExportAssignment", start, [value], { operator: "=" });
-      }
-      if (this.take("as")) {
-        this.expect("namespace");
-        const name = this.id();
-        this.semi();
-        return this.node("NamespaceExport", start, [name], { name: name.name });
-      }
-      if (this.take("default")) {
-        modifiers.push("default");
-        if (
-          !["class", "abstract", "function", "interface"].includes(
-            this.token.text,
+        rule(grammar.POSTFIX_TYPE),
+        zeroOrOne(and([sameLine, text("is"), rule(grammar.TYPE)])),
+      ],
+      ([left, predicate]) =>
+        predicate
+          ? extend(
+            left,
+            "TypePredicate",
+            [
+              left.kind === "TypeReference" && left.children.length === 1
+                ? left.children[0]
+                : left,
+              predicate[2],
+            ],
+            predicate[2].end,
+            { operator: "is" },
           )
-        ) {
-          const value = this.expression();
-          this.semi();
-          return this.node("ExportAssignment", start, [value], {
-            operator: "default",
-          });
-        }
-      }
-      if (
-        this.at("*") || this.at("{") ||
-        (this.at("type") && (this.next("*") || this.next("{")))
-      ) return this.moduleClause(start, true);
-    }
-    while (["declare", "abstract"].includes(this.token.text)) {
-      modifiers.push(this.tokens[this.pos++].text);
-    }
-    if (this.at("const") && this.next("enum")) {
-      modifiers.push(this.tokens[this.pos++].text);
-    }
-    if (this.take("import")) return this.moduleClause(start, false, modifiers);
-    if (this.take("type")) {
-      const name = this.id(), parameters = this.typeParameters();
-      this.expect("=");
-      const type = this.type();
-      this.semi();
-      return this.node("TypeAliasDeclaration", start, [
-        name,
-        ...parameters,
-        type,
-      ], { name: name.name, modifiers });
-    }
-    if (this.at("interface") || this.at("class")) {
-      const kind = this.tokens[this.pos++].text;
-      const name = this.at("{") || this.at("<") || this.at("extends") ||
-          this.at("implements")
-        ? undefined
-        : this.id();
-      if (!name && kind === "interface") this.fail("interface name");
-      const children = name
-        ? [name, ...this.typeParameters()]
-        : this.typeParameters();
-      for (const clause of ["extends", "implements"]) {
-        if (this.take(clause)) {
-          const s = this.pos;
-          const base = () => {
-            const start = this.pos;
-            const expression = this.expression(0, true);
-            return expression.kind === "ExpressionWithTypeArguments"
-              ? expression
-              : this.node("ExpressionWithTypeArguments", start, [expression]);
-          };
-          const bases = [base()];
-          while (this.take(",")) bases.push(base());
-          children.push(
-            this.node("HeritageClause", s, bases, { operator: clause }),
-          );
-        }
-      }
-      this.expect("{");
-      children.push(...this.members(kind === "class"));
-      this.expect("}");
-      return this.node(
-        kind === "class" ? "ClassDeclaration" : "InterfaceDeclaration",
-        start,
-        children,
-        { name: name?.name, modifiers },
-      );
-    }
-    if (this.take("function")) {
-      const name = this.at("(") || this.at("<") ? undefined : this.id();
-      const children = [
-        ...(name ? [name] : []),
-        ...this.typeParameters(),
-        ...this.parameters(),
-      ];
-      if (this.take(":")) children.push(this.type());
-      this.semi();
-      return this.node("FunctionDeclaration", start, children, {
-        name: name?.name,
-        modifiers,
-      });
-    }
-    if (["const", "let", "var"].includes(this.token.text)) {
-      const operator = this.tokens[this.pos++].text, children: Node[] = [];
-      do {
-        const s = this.pos, name = this.binding(), values = [name];
-        if (this.take(":")) values.push(this.type());
-        if (this.take("=")) values.push(this.expression());
-        children.push(
-          this.node("VariableDeclaration", s, values, { name: name.name }),
-        );
-      } while (this.take(","));
-      this.semi();
-      return this.node("VariableStatement", start, children, {
-        operator,
-        modifiers,
-      });
-    }
-    if (this.take("enum")) {
-      const name = this.id();
-      this.expect("{");
-      const members = this.list("}", () => {
-        const s = this.pos, name = this.name();
-        return this.node(
-          "EnumMember",
-          s,
-          this.take("=") ? [name, this.expression()] : [name],
-          { name: name.name },
-        );
-      });
-      return this.node("EnumDeclaration", start, [name, ...members], {
-        name: name.name,
-        modifiers,
-      });
-    }
-    if (["namespace", "module", "global"].includes(this.token.text)) {
-      const keyword = this.tokens[this.pos++].text;
-      const name = keyword === "global"
-        ? undefined
-        : this.token.kind === "string"
-        ? this.name()
-        : this.qualified();
-      const children = name ? [name] : [];
-      if (this.take("{")) {
-        children.push(...this.declarations("}"));
-        this.expect("}");
-      } else this.semi();
-      return this.node("ModuleDeclaration", start, children, {
-        name: name?.name ?? "global",
-        modifiers,
-        operator: keyword,
-      });
-    }
-    this.fail("declaration");
-  }
-  moduleClause(
-    start: number,
-    exported: boolean,
-    modifiers: string[] = [],
-  ): Node {
-    const children: Node[] = [];
-    if (this.at("type") && !this.next("from") && !this.next("=")) {
-      this.pos++;
-      modifiers.push("type");
-    }
-    if (!exported && this.token.kind === "string") children.push(this.name());
-    else {
-      if (!exported && this.token.kind === "identifier") {
-        const name = this.id();
-        children.push(name);
-        if (this.take("=")) {
-          if (this.take("require")) {
-            this.expect("(");
-            if (this.tokens[this.pos].kind !== "string") {
-              this.fail("module string");
-            }
-            children.push(this.name());
-            this.expect(")");
-          } else children.push(this.qualified());
-          this.semi();
-          return this.node("ImportEqualsDeclaration", start, children, {
-            name: name.name,
-            modifiers,
-          });
-        }
-        if (!this.at("from")) this.expect(",");
-      }
-      if (this.take("*")) {
-        const s = this.pos - 1;
-        children.push(
-          this.node(
-            "NamespaceSpecifier",
-            s,
-            this.take("as") ? [this.name()] : [],
+          : left,
+    ),
+  ]);
+}
+function templateGrammar(kind: string, value: Grammar<Node>): Grammar<Node> {
+  const part = (categoryName: string) =>
+    node("TemplateText", category(categoryName), (name) => ({ name }));
+  return node(
+    kind,
+    or([
+      and([part("templateLiteral")], ([part]) => [part]),
+      and(
+        [
+          part("templateHead"),
+          zeroOrMany(and([value, part("templateMiddle")])),
+          value,
+          part("templateTail"),
+        ],
+        ([head, middle, value, tail]) => [head, ...middle.flat(), value, tail],
+      ),
+    ]),
+    (children) => ({ children }),
+  );
+}
+function members(classMember: boolean): Grammar<Node[]> {
+  return zeroOrMany(
+    or([
+      and([text(";")], () => [] as Node[]),
+      and(
+        [member(classMember), or([text(","), semicolon])],
+        ([value]) => [value],
+      ),
+    ]),
+    (items) => items.flat(),
+  );
+}
+function member(classMember: boolean): Grammar<Node> {
+  const signature = and([
+    rule(grammar.SIGNATURE),
+    zeroOrOne(after(":", rule(grammar.TYPE))),
+  ], ([parameters, result]) => [...parameters, ...present(result)]);
+  return located(
+    and([
+      modifiers(memberModifiers, memberNameFollower),
+      or([
+        ...(classMember ? [] : [
+          located(
+            and([zeroOrOne(text("new")), signature]),
+            ([construct, children]) => ({
+              kind: construct ? "ConstructSignature" : "CallSignature",
+              children,
+            }),
           ),
+        ]),
+        node(
+          "IndexSignature",
+          and([
+            text("["),
+            id,
+            text(":"),
+            rule(grammar.TYPE),
+            text("]"),
+            text(":"),
+            rule(grammar.TYPE),
+          ]),
+          ([, name, , index, , , value]) => ({
+            children: [name, index, value],
+          }),
+        ),
+        located(
+          and([
+            zeroOrOne(
+              and(
+                [either("get", "set"), peek(memberNameFollower)],
+                ([value]) => value,
+              ),
+            ),
+            or([
+              node(
+                "ComputedName",
+                between("[", rule(grammar.EXPRESSION), "]"),
+                (value) => ({ children: [value] }),
+              ),
+              node(
+                "PrivateName",
+                after("#", id),
+                (value) => ({ name: `#${value.name}`, children: [value] }),
+              ),
+              name,
+            ]),
+            zeroOrOne(text("?")),
+            or([
+              and([signature], ([children]) => ({ method: true, children })),
+              and(
+                [
+                  zeroOrOne(after(":", rule(grammar.TYPE))),
+                  zeroOrOne(after("=", rule(grammar.EXPRESSION))),
+                ],
+                ([type, value]) => ({
+                  method: false,
+                  children: [...present(type), ...present(value)],
+                }),
+              ),
+            ]),
+          ]),
+          ([accessor, name, optional, tail]) => ({
+            kind: tail.method
+              ? classMember && name.name === "constructor"
+                ? "Constructor"
+                : accessor === "get"
+                ? "GetAccessor"
+                : accessor === "set"
+                ? "SetAccessor"
+                : "MethodSignature"
+              : "PropertySignature",
+            name: name.name,
+            optional: !!optional,
+            modifiers: present(accessor),
+            children: [name, ...tail.children],
+          }),
+        ),
+      ]),
+    ]),
+    ([modifiers, value]) => ({
+      kind: value.kind,
+      name: value.name,
+      optional: value.optional,
+      children: value.children,
+      modifiers: [...modifiers, ...(value.modifiers ?? [])],
+    }),
+  );
+}
+// Operator precedence is a stack of sequence/repetition grammars. The folds only
+// construct ASTs; they never advance the parser or decide which tokens to read.
+function binary(
+  lower: Grammar<Node>,
+  operators: Grammar<string>,
+): Grammar<Node> {
+  return and(
+    [lower, zeroOrMany(and([operators, lower]))],
+    ([first, rest]) =>
+      rest.reduce(
+        (left, [operator, right]) =>
+          extend(left, "BinaryExpression", [left, right], right.end, {
+            operator,
+          }),
+        first,
+      ),
+  );
+}
+function expression(heritage: boolean): Grammar<Node> {
+  const power = rule(heritage ? grammar.HERITAGE_POWER : grammar.POWER);
+  const product = binary(power, either("*", "/", "%"));
+  const sum = binary(product, either("+", "-"));
+  const shift = (value: string) =>
+    and([
+      condition(value, (ctx) => {
+        const count = value.length;
+        const parts = (ctx as DeclarationContext).lexemes.slice(
+          ctx.pos,
+          ctx.pos + count,
         );
-      } else if (this.take("{")) {
-        children.push(...this.list("}", () => {
-          const s = this.pos, mods: string[] = [];
-          if (
-            this.at("type") &&
-            !["as", ",", "}"].includes(this.tokens[this.pos + 1]?.text)
-          ) {
-            mods.push("type");
-            this.pos++;
-          }
-          const name = this.name(), values = [name];
-          if (this.take("as")) values.push(this.name());
-          return this.node("ImportExportSpecifier", s, values, {
-            modifiers: mods,
-          });
-        }));
-      }
-      if (!exported || this.at("from")) {
-        this.expect("from");
-        if (this.tokens[this.pos].kind !== "string") this.fail("module string");
-        children.push(this.name());
-      }
-    }
-    if (this.take("with") || this.take("assert")) {
-      children.push(this.attributesObject());
-    }
-    this.semi();
-    return this.node(
-      exported ? "ExportDeclaration" : "ImportDeclaration",
-      start,
-      children,
-      { modifiers },
-    );
-  }
+        return parts.length === count && parts.every((part, i) =>
+          part.text === value[i] && (!i || parts[i - 1].end === part.start)
+        );
+      }),
+      ...Array.from(value, text),
+    ], () => value);
+  const shifts = binary(sum, or([shift(">>>"), shift(">>"), shift("<<")]));
+  return binary(
+    binary(
+      binary(binary(binary(shifts, text("&")), text("^")), text("|")),
+      text("&&"),
+    ),
+    either("||", "??"),
+  );
+}
+function power(heritage: boolean): Grammar<Node> {
+  return and(
+    [
+      rule(heritage ? grammar.UNARY_HERITAGE : grammar.UNARY),
+      zeroOrOne(
+        after("**", rule(heritage ? grammar.HERITAGE_POWER : grammar.POWER)),
+      ),
+    ],
+    ([left, right]) =>
+      right
+        ? extend(left, "BinaryExpression", [left, right], right.end, {
+          operator: "**",
+        })
+        : left,
+  );
+}
+function unary(heritage: boolean): Grammar<Node> {
+  return or([
+    node(
+      "UnaryExpression",
+      and([
+        either("+", "-", "~", "!"),
+        rule(heritage ? grammar.UNARY_HERITAGE : grammar.UNARY),
+      ]),
+      ([operator, value]) => ({ operator, children: [value] }),
+    ),
+    and(
+      [
+        or([
+          node(
+            "ParenthesizedExpression",
+            between(
+              "(",
+              rule(heritage ? grammar.HERITAGE_EXPRESSION : grammar.EXPRESSION),
+              ")",
+            ),
+            (value) => ({ children: [value] }),
+          ),
+          templateGrammar("TemplateExpression", rule(grammar.EXPRESSION)),
+          name,
+        ]),
+        zeroOrMany(or([
+          node(
+            "CallExpression",
+            after("(", list(rule(grammar.EXPRESSION), ")")),
+            (children) => ({ children }),
+          ),
+          node(
+            "PropertyAccess",
+            after(".", id),
+            (value) => ({ children: [value] }),
+          ),
+          node(
+            "ElementAccess",
+            between("[", rule(grammar.EXPRESSION), "]"),
+            (value) => ({ children: [value] }),
+          ),
+          ...(heritage
+            ? [
+              node(
+                "ExpressionWithTypeArguments",
+                after("<", list(rule(grammar.TYPE), ">")),
+                (children) => ({ children }),
+              ),
+            ]
+            : []),
+        ])),
+      ],
+      ([first, rest]) =>
+        rest.reduce(
+          (left, suffix) =>
+            extend(left, suffix.kind, [left, ...suffix.children], suffix.end),
+          first,
+        ),
+    ),
+  ]);
 }
 
-export const parseDeclarations = createSourceParser<DeclarationFile>(
-  ({ cursor }) => {
-    try {
-      const { tokens, comments } = lex(cursor);
-      const grammar = new DeclarationGrammar(tokens);
-      const children = grammar.declarations();
-      return [{
-        kind: "DeclarationFile",
-        start: 0,
-        end: cursor.offset,
-        source: cursor.input,
-        children,
-        comments,
-      }, null];
-    } catch (error) {
-      if (!(error instanceof ParseFailure)) throw error;
-      return [null, { offset: error.offset, expected: error.expected }];
-    }
+const grammar = {
+  QUALIFIED(): Grammar<Node> {
+    return node(
+      "QualifiedName",
+      and([id, zeroOrMany(after(".", id))]),
+      ([first, rest]) => ({
+        children: [first, ...rest],
+        name: [first, ...rest].map((n) => n.name).join("."),
+      }),
+    );
   },
-);
+  TYPE_PARAMETERS(): Grammar<Node[]> {
+    return and(
+      [zeroOrOne(after("<", list(rule(this.TYPE_PARAMETER), ">")))],
+      ([items]) => items ?? [],
+    );
+  },
+  TYPE_PARAMETER(): Grammar<Node> {
+    return node(
+      "TypeParameter",
+      and([
+        modifiers(["const", "in", "out"], identifierToken),
+        id,
+        zeroOrOne(
+          after(
+            "extends",
+            node(
+              "Constraint",
+              rule(this.TYPE),
+              (value) => ({ children: [value] }),
+            ),
+          ),
+        ),
+        zeroOrOne(
+          after(
+            "=",
+            node(
+              "DefaultType",
+              rule(this.TYPE),
+              (value) => ({ children: [value] }),
+            ),
+          ),
+        ),
+      ]),
+      ([modifiers, name, constraint, value]) => ({
+        name: name.name,
+        modifiers,
+        children: [name, ...present(constraint), ...present(value)],
+      }),
+    );
+  },
+  TYPE_ARGUMENTS(): Grammar<Node[]> {
+    return and(
+      [zeroOrOne(after("<", list(rule(this.TYPE), ">")))],
+      ([items]) => items ?? [],
+    );
+  },
+  SIGNATURE(): Grammar<Node[]> {
+    return and([
+      rule(this.TYPE_PARAMETERS),
+      text("("),
+      list(rule(this.PARAMETER), ")"),
+    ], ([types, , parameters]) => [...types, ...parameters]);
+  },
+  PARAMETER(): Grammar<Node> {
+    return node(
+      "Parameter",
+      and([
+        modifiers(parameterModifiers, identifierToken),
+        zeroOrOne(text("...")),
+        rule(this.BINDING),
+        zeroOrOne(text("?")),
+        zeroOrOne(after(":", rule(this.TYPE))),
+      ]),
+      ([modifiers, rest, name, optional, type]) => ({
+        modifiers,
+        rest: !!rest,
+        optional: !!optional,
+        name: name.name,
+        children: [name, ...present(type)],
+      }),
+    );
+  },
+  BINDING(): Grammar<Node> {
+    return or([
+      node(
+        "ObjectBinding",
+        after(
+          "{",
+          list(
+            node(
+              "BindingElement",
+              and([
+                zeroOrOne(text("...")),
+                name,
+                zeroOrOne(after(":", rule(this.BINDING))),
+              ]),
+              ([rest, name, binding]) => ({
+                rest: !!rest,
+                children: [name, ...present(binding)],
+              }),
+            ),
+            "}",
+          ),
+        ),
+        (children) => ({ children }),
+      ),
+      node(
+        "ArrayBinding",
+        between(
+          "[",
+          zeroOrMany(or([
+            node("OmittedBinding", text(",")),
+            and([
+              node(
+                "BindingElement",
+                and([zeroOrOne(text("...")), rule(this.BINDING)]),
+                ([rest, value]) => ({ rest: !!rest, children: [value] }),
+              ),
+              or([text(","), peek(text("]"))]),
+            ], ([value]) => value),
+          ])),
+          "]",
+        ),
+        (children) => ({ children }),
+      ),
+      id,
+    ]);
+  },
+  TYPE(): Grammar<Node> {
+    return and(
+      [
+        rule(this.UNION),
+        zeroOrOne(and([
+          sameLine,
+          text("extends"),
+          rule(this.CONSTRAINT),
+          text("?"),
+          rule(this.TYPE),
+          text(":"),
+          rule(this.TYPE),
+        ])),
+      ],
+      ([left, tail]) =>
+        tail
+          ? extend(
+            left,
+            "ConditionalType",
+            [left, tail[2], tail[4], tail[6]],
+            tail[6].end,
+          )
+          : left,
+    );
+  },
+  CONSTRAINT(): Grammar<Node> {
+    return unionGrammar(false);
+  },
+  UNION(): Grammar<Node> {
+    return unionGrammar(true);
+  },
+  PREFIX(): Grammar<Node> {
+    return prefixGrammar(true);
+  },
+  CONSTRAINT_PREFIX(): Grammar<Node> {
+    return prefixGrammar(false);
+  },
+  POSTFIX_TYPE(): Grammar<Node> {
+    return and(
+      [
+        rule(this.PRIMARY_TYPE),
+        zeroOrMany(
+          node(
+            "TypeSuffix",
+            and([sameLine, text("["), zeroOrOne(rule(this.TYPE)), text("]")]),
+            ([, , index]) => ({ children: present(index) }),
+          ),
+        ),
+      ],
+      ([first, rest]) =>
+        rest.reduce((left, suffix) =>
+          extend(
+            left,
+            suffix.children.length ? "IndexedAccessType" : "ArrayType",
+            [left, ...suffix.children],
+            suffix.end,
+          ), first),
+    );
+  },
+  PRIMARY_TYPE(): Grammar<Node> {
+    return or([
+      node(
+        "ParenthesizedType",
+        between("(", rule(this.TYPE), ")"),
+        (value) => ({ children: [value] }),
+      ),
+      rule(this.OBJECT_TYPE),
+      node(
+        "TupleType",
+        after("[", list(rule(this.TUPLE_ELEMENT), "]")),
+        (children) => ({ children }),
+      ),
+      node(
+        "ImportType",
+        after("typeof", rule(this.IMPORT_TYPE)),
+        (value) => ({ operator: "typeof", children: value.children }),
+      ),
+      node(
+        "TypeQuery",
+        and([text("typeof"), rule(this.QUALIFIED), rule(this.TYPE_ARGUMENTS)]),
+        ([, name, args]) => ({ children: [name, ...args] }),
+      ),
+      rule(this.IMPORT_TYPE),
+      templateGrammar("TemplateLiteralType", rule(this.TYPE)),
+      node(
+        "LiteralType",
+        or([
+          stringToken,
+          numberToken,
+          either("true", "false", "null"),
+          and([text("-"), numberToken], ([minus, value]) => minus + value),
+        ]),
+        (name) => ({ name }),
+      ),
+      node(
+        "KeywordType",
+        and([
+          either(
+            "any",
+            "unknown",
+            "never",
+            "void",
+            "undefined",
+            "string",
+            "number",
+            "boolean",
+            "bigint",
+            "symbol",
+            "object",
+            "this",
+            "intrinsic",
+          ),
+          not(text(".")),
+        ]),
+        ([name]) => ({ name }),
+      ),
+      node(
+        "TypeReference",
+        and([rule(this.QUALIFIED), rule(this.TYPE_ARGUMENTS)]),
+        ([name, args]) => ({ name: name.name, children: [name, ...args] }),
+      ),
+    ]);
+  },
+  TUPLE_ELEMENT(): Grammar<Node> {
+    return node(
+      "TupleElement",
+      and([
+        zeroOrOne(text("...")),
+        or([
+          and(
+            [id, zeroOrOne(text("?")), text(":"), rule(this.TYPE)],
+            ([name, optional, , value]) => ({
+              name: name.name,
+              optional: !!optional,
+              children: [name, value],
+            }),
+          ),
+          and(
+            [rule(this.TYPE), zeroOrOne(text("?"))],
+            ([value, optional]) => ({
+              optional: !!optional,
+              children: [value],
+            }),
+          ),
+        ]),
+      ]),
+      ([rest, value]) => ({ ...value, rest: !!rest }),
+    );
+  },
+  IMPORT_TYPE(): Grammar<Node> {
+    return node(
+      "ImportType",
+      and([
+        text("import"),
+        text("("),
+        moduleName,
+        zeroOrOne(after(",", rule(this.ATTRIBUTES))),
+        text(")"),
+        zeroOrOne(after(".", rule(this.QUALIFIED))),
+        rule(this.TYPE_ARGUMENTS),
+      ]),
+      ([, , name, attributes, , qualifier, args]) => ({
+        children: [
+          name,
+          ...present(attributes),
+          ...present(qualifier),
+          ...args,
+        ],
+      }),
+    );
+  },
+  ATTRIBUTES(): Grammar<Node> {
+    return node(
+      "ImportAttributes",
+      after(
+        "{",
+        list(
+          node(
+            "ImportAttribute",
+            and([
+              name,
+              text(":"),
+              or([rule(this.ATTRIBUTES), name]),
+            ]),
+            ([name, , value]) => ({ children: [name, value] }),
+          ),
+          "}",
+        ),
+      ),
+      (children) => ({ children }),
+    );
+  },
+  OBJECT_TYPE(): Grammar<Node> {
+    return or([
+      node(
+        "MappedType",
+        and([
+          text("{"),
+          zeroOrOne(
+            and(
+              [zeroOrOne(either("+", "-")), text("readonly")],
+              ([sign, value]) => (sign ?? "") + value,
+            ),
+          ),
+          text("["),
+          id,
+          text("in"),
+          rule(this.TYPE),
+          zeroOrOne(
+            after(
+              "as",
+              node(
+                "NameRemapping",
+                rule(this.TYPE),
+                (value) => ({ children: [value] }),
+              ),
+            ),
+          ),
+          text("]"),
+          zeroOrOne(
+            and(
+              [zeroOrOne(either("+", "-")), text("?")],
+              ([sign, value]) => (sign ?? "") + value,
+            ),
+          ),
+          zeroOrOne(after(":", rule(this.TYPE))),
+          zeroOrOne(text(";")),
+          text("}"),
+        ]),
+        ([, readonly, , name, , type, remap, , optional, value]) => ({
+          modifiers: [...present(readonly), ...present(optional)],
+          children: [name, type, ...present(remap), ...present(value)],
+        }),
+      ),
+      node(
+        "TypeLiteral",
+        between("{", members(false), "}"),
+        (children) => ({ children }),
+      ),
+    ]);
+  },
+  EXPRESSION(): Grammar<Node> {
+    return expression(false);
+  },
+  HERITAGE_EXPRESSION(): Grammar<Node> {
+    return expression(true);
+  },
+  POWER(): Grammar<Node> {
+    return power(false);
+  },
+  HERITAGE_POWER(): Grammar<Node> {
+    return power(true);
+  },
+  UNARY(): Grammar<Node> {
+    return unary(false);
+  },
+  UNARY_HERITAGE(): Grammar<Node> {
+    return unary(true);
+  },
+  HERITAGE(): Grammar<Node[]> {
+    return zeroOrMany(and([
+      either("extends", "implements"),
+      node(
+        "HeritageClause",
+        oneOrManySep(
+          and(
+            [rule(this.HERITAGE_EXPRESSION)],
+            ([value]) =>
+              value.kind === "ExpressionWithTypeArguments" ? value : extend(
+                value,
+                "ExpressionWithTypeArguments",
+                [value],
+                value.end,
+              ),
+          ),
+          text(","),
+        ),
+        (children) => ({ children }),
+      ),
+    ], ([operator, clause]) => ({ ...clause, operator })));
+  },
+  CLASS(): Grammar<Node> {
+    return node(
+      "ClassDeclaration",
+      and([
+        text("class"),
+        zeroOrOne(
+          and([not(either("extends", "implements")), id], ([, value]) => value),
+        ),
+        rule(this.TYPE_PARAMETERS),
+        rule(this.HERITAGE),
+        text("{"),
+        members(true),
+        text("}"),
+      ]),
+      ([, name, parameters, heritage, , members]) => ({
+        name: name?.name,
+        children: [...present(name), ...parameters, ...heritage, ...members],
+      }),
+    );
+  },
+  INTERFACE(): Grammar<Node> {
+    return node(
+      "InterfaceDeclaration",
+      and([
+        text("interface"),
+        id,
+        rule(this.TYPE_PARAMETERS),
+        rule(this.HERITAGE),
+        text("{"),
+        members(false),
+        text("}"),
+      ]),
+      ([, name, parameters, heritage, , members]) => ({
+        name: name.name,
+        children: [name, ...parameters, ...heritage, ...members],
+      }),
+    );
+  },
+  FUNCTION(): Grammar<Node> {
+    return node(
+      "FunctionDeclaration",
+      and([
+        text("function"),
+        zeroOrOne(id),
+        rule(this.SIGNATURE),
+        zeroOrOne(after(":", rule(this.TYPE))),
+        semicolon,
+      ]),
+      ([, name, signature, type]) => ({
+        name: name?.name,
+        children: [...present(name), ...signature, ...present(type)],
+      }),
+    );
+  },
+  VARIABLE(): Grammar<Node> {
+    return node(
+      "VariableDeclaration",
+      and([
+        rule(this.BINDING),
+        zeroOrOne(after(":", rule(this.TYPE))),
+        zeroOrOne(after("=", rule(this.EXPRESSION))),
+      ]),
+      ([name, type, value]) => ({
+        name: name.name,
+        children: [name, ...present(type), ...present(value)],
+      }),
+    );
+  },
+  DECLARATION_BODY(): Grammar<Node> {
+    return or([
+      node(
+        "TypeAliasDeclaration",
+        and([
+          text("type"),
+          id,
+          rule(this.TYPE_PARAMETERS),
+          text("="),
+          rule(this.TYPE),
+          semicolon,
+        ]),
+        ([, name, parameters, , type]) => ({
+          name: name.name,
+          children: [name, ...parameters, type],
+        }),
+      ),
+      rule(this.CLASS),
+      rule(this.INTERFACE),
+      rule(this.FUNCTION),
+      node(
+        "VariableStatement",
+        and([
+          either("const", "let", "var"),
+          rule(this.VARIABLE),
+          zeroOrMany(after(",", rule(this.VARIABLE))),
+          semicolon,
+        ]),
+        ([operator, first, rest]) => ({ operator, children: [first, ...rest] }),
+      ),
+      node(
+        "EnumDeclaration",
+        and([
+          text("enum"),
+          id,
+          text("{"),
+          list(
+            node(
+              "EnumMember",
+              and([name, zeroOrOne(after("=", rule(this.EXPRESSION)))]),
+              ([name, value]) => ({
+                name: name.name,
+                children: [name, ...present(value)],
+              }),
+            ),
+            "}",
+          ),
+        ]),
+        ([, name, , members]) => ({
+          name: name.name,
+          children: [name, ...members],
+        }),
+      ),
+      node(
+        "ModuleDeclaration",
+        and([
+          or([
+            and(
+              [text("global")],
+              ([operator]) => ({
+                operator,
+                name: undefined as Node | undefined,
+              }),
+            ),
+            and([
+              either("namespace", "module"),
+              or([moduleName, rule(this.QUALIFIED)]),
+            ], ([operator, name]) => ({ operator, name })),
+          ]),
+          or([
+            between("{", rule(this.DECLARATIONS), "}"),
+            and([semicolon], () => [] as Node[]),
+          ]),
+        ]),
+        ([{ operator, name }, children]) => ({
+          operator,
+          name: name?.name ?? "global",
+          children: [...present(name), ...children],
+        }),
+      ),
+      rule(this.IMPORT),
+    ]);
+  },
+  DECLARATION(): Grammar<Node> {
+    return or([
+      node("EmptyDeclaration", text(";")),
+      rule(this.EXPORT),
+      located(
+        and([
+          zeroOrMany(either("declare", "abstract")),
+          zeroOrOne(
+            and([text("const"), peek(text("enum"))], ([value]) => value),
+          ),
+          rule(this.DECLARATION_BODY),
+        ]),
+        ([modifiers, constant, value]) => ({
+          kind: value.kind,
+          children: value.children,
+          name: value.name,
+          operator: value.operator,
+          modifiers: [
+            ...modifiers,
+            ...present(constant),
+            ...(value.modifiers ?? []),
+          ],
+        }),
+      ),
+    ]);
+  },
+  EXPORT(): Grammar<Node> {
+    return located(
+      and([
+        text("export"),
+        or([
+          node(
+            "ExportAssignment",
+            and([text("="), rule(this.EXPRESSION), semicolon]),
+            ([operator, value]) => ({ operator, children: [value] }),
+          ),
+          node(
+            "NamespaceExport",
+            and([text("as"), text("namespace"), id, semicolon]),
+            ([, , name]) => ({ name: name.name, children: [name] }),
+          ),
+          located(
+            after(
+              "default",
+              or([
+                located(
+                  and([
+                    zeroOrOne(text("abstract")),
+                    or([
+                      rule(this.CLASS),
+                      rule(this.INTERFACE),
+                      rule(this.FUNCTION),
+                    ]),
+                  ]),
+                  ([abstract, value]) => ({
+                    kind: value.kind,
+                    name: value.name,
+                    children: value.children,
+                    modifiers: present(abstract),
+                  }),
+                ),
+                node(
+                  "ExportAssignment",
+                  and([rule(this.EXPRESSION), semicolon]),
+                  ([value]) => ({ operator: "default", children: [value] }),
+                ),
+              ]),
+            ),
+            (value) => ({
+              kind: value.kind,
+              name: value.name,
+              operator: value.operator,
+              children: value.children,
+              modifiers: ["default", ...(value.modifiers ?? [])],
+            }),
+          ),
+          node(
+            "ExportDeclaration",
+            and([
+              zeroOrOne(text("type")),
+              rule(this.SPECIFIERS),
+              zeroOrOne(after("from", moduleName)),
+              zeroOrOne(rule(this.ATTRIBUTE_CLAUSE)),
+              semicolon,
+            ]),
+            ([type, specifiers, from, attributes]) => ({
+              modifiers: present(type),
+              children: [
+                ...specifiers,
+                ...present(from),
+                ...present(attributes),
+              ],
+            }),
+          ),
+          rule(this.DECLARATION),
+        ]),
+      ]),
+      ([, value]) => ({
+        kind: value.kind,
+        name: value.name,
+        children: value.children,
+        operator: value.operator,
+        modifiers: ["export", ...(value.modifiers ?? [])],
+      }),
+    );
+  },
+  IMPORT(): Grammar<Node> {
+    return located(
+      and([
+        text("import"),
+        zeroOrOne(
+          and([text("type"), not(either("from", "="))], ([value]) => value),
+        ),
+        or([
+          node(
+            "ImportEqualsDeclaration",
+            and([
+              id,
+              text("="),
+              or([
+                after("require", between("(", moduleName, ")")),
+                rule(this.QUALIFIED),
+              ]),
+              semicolon,
+            ]),
+            ([name, , value]) => ({ name: name.name, children: [name, value] }),
+          ),
+          node(
+            "ImportDeclaration",
+            and([
+              or([
+                and([moduleName], ([name]) => [name]),
+                and([
+                  or([
+                    and(
+                      [id, zeroOrOne(after(",", rule(this.SPECIFIERS)))],
+                      ([name, rest]) => [name, ...(rest ?? [])],
+                    ),
+                    rule(this.SPECIFIERS),
+                  ]),
+                  text("from"),
+                  moduleName,
+                ], ([names, , from]) => [...names, from]),
+              ]),
+              zeroOrOne(rule(this.ATTRIBUTE_CLAUSE)),
+              semicolon,
+            ]),
+            ([names, attributes]) => ({
+              children: [...names, ...present(attributes)],
+            }),
+          ),
+        ]),
+      ]),
+      ([, type, value]) => ({
+        kind: value.kind,
+        name: value.name,
+        children: value.children,
+        modifiers: present(type),
+      }),
+    );
+  },
+  ATTRIBUTE_CLAUSE(): Grammar<Node> {
+    return and(
+      [either("with", "assert"), rule(this.ATTRIBUTES)],
+      ([, value]) => value,
+    );
+  },
+  SPECIFIERS(): Grammar<Node[]> {
+    return or([
+      and([
+        node(
+          "NamespaceSpecifier",
+          and([text("*"), zeroOrOne(after("as", name))]),
+          ([, name]) => ({ children: present(name) }),
+        ),
+      ], ([value]) => [value]),
+      after(
+        "{",
+        list(
+          node(
+            "ImportExportSpecifier",
+            and([
+              zeroOrOne(
+                and(
+                  [text("type"), not(either("as", ",", "}"))],
+                  ([value]) => value,
+                ),
+              ),
+              name,
+              zeroOrOne(after("as", name)),
+            ]),
+            ([type, name, alias]) => ({
+              modifiers: present(type),
+              children: [name, ...present(alias)],
+            }),
+          ),
+          "}",
+        ),
+      ),
+    ]);
+  },
+  DECLARATIONS(): Grammar<Node[]> {
+    return zeroOrMany(rule(this.DECLARATION));
+  },
+};
+
+// createParser registers recursive rule factories. SOURCE is a lexical adapter:
+// it supplies token strings plus their source metadata to the ordinary Grammar
+// context. It does not implement any declaration productions.
+const declarationParser = createParser([createToken(/[\s\S]+/)], {
+  ...grammar,
+  SOURCE(): Grammar<DeclarationFile> {
+    const file = and(
+      [rule(this.DECLARATIONS), consume(EOF)],
+      ([children]) => children,
+    );
+    return (ctx) => {
+      try {
+        const { tokens: lexemes, comments } = lex(new SourceCursor(ctx.input));
+        const context: DeclarationContext = {
+          input: ctx.input,
+          tokens: lexemes.slice(0, -1).map((value) => value.text),
+          pos: 0,
+          skipRule: null,
+          lexemes,
+        };
+        const result = file(context);
+        if (result[1] !== null) {
+          throw new ParseFailure(
+            token(context, result[0]).start,
+            result[1].name,
+          );
+        }
+        ctx.pos = ctx.tokens.length;
+        return [{
+          kind: "DeclarationFile",
+          start: 0,
+          end: ctx.input.length,
+          source: ctx.input,
+          children: result[0],
+          comments,
+        }, null];
+      } catch (error) {
+        if (!(error instanceof ParseFailure)) throw error;
+        throw new Error(
+          `Parse error: expected ${error.expected} at ${error.offset}`,
+        );
+      }
+    };
+  },
+});
+export const parseDeclarations = (input: string): DeclarationFile =>
+  declarationParser("SOURCE", input);
