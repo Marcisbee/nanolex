@@ -1,13 +1,17 @@
 /** Test-only declaration grammar. See typescript.md for sources and scope. */
 import {
   and,
+  compile,
   consume,
   consumeAny,
   type Context,
   createParser,
   createToken,
+  dispatch,
   EOF,
+  fold,
   type Grammar,
+  map,
   not,
   oneOrManySep,
   or,
@@ -68,13 +72,13 @@ export interface Comment {
   doc?: JSDoc;
   directive?: { name: string; attributes: Record<string, string> };
 }
-interface Lexeme {
-  text: string;
-  kind: string;
-  start: number;
-  end: number;
-  docs: JSDoc[];
-  newline: boolean;
+interface Lexemes {
+  values: string[];
+  kinds: string[];
+  starts: number[];
+  ends: number[];
+  docs: JSDoc[][];
+  newlines: boolean[];
 }
 class ParseFailure extends Error {
   constructor(readonly offset: number, readonly expected: string) {
@@ -88,44 +92,51 @@ const docLink = createToken(
 );
 const docTag = createToken(/(?:^|[ \t\n])@[\w-]+\b[ \t]*/, "JSDoc tag");
 const docFence = createToken(/```[\s\S]*?(?:```|$)/, "JSDoc fenced example");
-const docParser = createParser([docFence, docLink, docTag], {
-  PROSE(): Grammar<string> {
-    return zeroOrMany(
-      and([not(consume(docTag)), consumeAny()], ([, value]) => value),
-      (parts) => parts.join(""),
-    );
+const docParser = createParser(
+  [docFence, docLink, docTag],
+  {
+    PROSE(): Grammar<string> {
+      return zeroOrMany(
+        and([not(consume(docTag)), consumeAny()], ([, value]) => value),
+        (parts) => parts.join(""),
+      );
+    },
+    DOCUMENT(): Grammar<{ description: string; tags: JSDocTag[] }> {
+      return and([
+        rule(this.PROSE),
+        zeroOrMany(
+          and([consume(docTag), rule(this.PROSE)], ([marker, text]) => ({
+            name: marker.trim().slice(1).trim(),
+            text: text.trim(),
+            links: jsdocLinks(text),
+          })),
+        ),
+      ], ([description, tags]) => ({ description: description.trim(), tags }));
+    },
+    LINKS(): Grammar<JSDocLink[]> {
+      return zeroOrMany(
+        or([
+          consume(docLink, (raw): JSDocLink => {
+            const match =
+              /^\{@(link|linkcode|linkplain)\s+([^\s|}]+)(?:\s*\|?\s*([^}]*))?\}$/
+                .exec(raw)!;
+            return {
+              kind: match[1] as JSDocLink["kind"],
+              target: match[2],
+              label: match[3] ?? "",
+              raw,
+            };
+          }),
+          and([consumeAny()], () => undefined),
+        ]),
+        (links) =>
+          links.filter((value): value is JSDocLink => value !== undefined),
+      );
+    },
   },
-  DOCUMENT(): Grammar<{ description: string; tags: JSDocTag[] }> {
-    return and([
-      rule(this.PROSE),
-      zeroOrMany(and([consume(docTag), rule(this.PROSE)], ([marker, text]) => ({
-        name: marker.trim().slice(1).trim(),
-        text: text.trim(),
-        links: jsdocLinks(text),
-      }))),
-    ], ([description, tags]) => ({ description: description.trim(), tags }));
-  },
-  LINKS(): Grammar<JSDocLink[]> {
-    return zeroOrMany(
-      or([
-        consume(docLink, (raw): JSDocLink => {
-          const match =
-            /^\{@(link|linkcode|linkplain)\s+([^\s|}]+)(?:\s*\|?\s*([^}]*))?\}$/
-              .exec(raw)!;
-          return {
-            kind: match[1] as JSDocLink["kind"],
-            target: match[2],
-            label: match[3] ?? "",
-            raw,
-          };
-        }),
-        and([consumeAny()], () => undefined),
-      ]),
-      (links) =>
-        links.filter((value): value is JSDocLink => value !== undefined),
-    );
-  },
-});
+  undefined,
+  { compile: true },
+);
 function jsdocLinks(text: string): JSDocLink[] {
   return text.includes("{@") ? docParser("LINKS", text) : [];
 }
@@ -162,13 +173,17 @@ const annotationParser = createParser(
       ], ([type, tail]) => ({ type: type?.slice(1, -1), tail: tail.trim() }));
     },
   },
+  undefined,
+  { compile: true },
 );
 
 /** Unknown tags and all original comment text are deliberately retained. */
 export function parseJSDoc(raw: string, start = 0): JSDoc {
   const text = raw.slice(3, -2).replace(/\r\n?/g, "\n")
-    .split("\n").map((line) => line.replace(/^\s*\* ?/, "")).join("\n").trim();
-  const { description, tags } = docParser("DOCUMENT", text);
+    .replace(/(^|\n)[^\S\n]*\* ?/g, "$1").trim();
+  const { description, tags } = text.includes("@")
+    ? docParser("DOCUMENT", text)
+    : { description: text, tags: [] as JSDocTag[] };
   for (const tag of tags) {
     let { type, tail } = tag.text.startsWith("{")
       ? annotationParser("ANNOTATION", tag.text)
@@ -221,52 +236,75 @@ const number = sourcePattern(
   /(?:0[xX][\da-fA-F](?:_?[\da-fA-F])*|0[bB][01](?:_?[01])*|0[oO][0-7](?:_?[0-7])*|(?:\d(?:_?\d)*(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?)n?/,
 );
 const whitespace = sourcePattern(/\s+/u);
-function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
-  const tokens: Lexeme[] = [], comments: Comment[] = [];
-  let docs: JSDoc[] = [], newline = false;
+const unicodeWhitespace = /\s/u;
+const hasLineBreak = /[\r\n\u2028\u2029]/;
+const quotedString = sourcePattern(
+  /"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n\u2028\u2029])*"|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n\u2028\u2029])*'/,
+);
+const templateChunk = sourcePattern(/(?:\\[\s\S]|[^\\`$]|\$(?!\{))*(?:`|\$\{)/);
+const lineComment = sourcePattern(/[^\r\n\u2028\u2029]*/);
+const punctuationPairs = new Set([
+  "=>",
+  "**",
+  "&&",
+  "||",
+  "??",
+  "==",
+  "!=",
+  "?.",
+]);
+
+function lex(cursor: SourceCursor): { tokens: Lexemes; comments: Comment[] } {
+  const tokens: Lexemes = {
+    values: [],
+    kinds: [],
+    starts: [],
+    ends: [],
+    docs: [],
+    newlines: [],
+  };
+  const comments: Comment[] = [];
+  const noDocs: JSDoc[] = [];
+  let docs = noDocs, newline = false;
   const templates: number[] = [];
   const context = { cursor, state: undefined };
   const emit = (kind: string, start: number) => {
-    tokens.push({
-      kind,
-      start,
-      end: cursor.offset,
-      text: cursor.slice(start),
-      docs,
-      newline,
-    });
-    docs = [];
+    tokens.values.push(cursor.slice(start));
+    tokens.kinds.push(kind);
+    tokens.starts.push(start);
+    tokens.ends.push(cursor.offset);
+    tokens.docs.push(docs);
+    tokens.newlines.push(newline);
+    docs = noDocs;
     newline = false;
   };
   const template = (start: number, continuation: boolean) => {
     cursor.advance();
-    while (!cursor.eof) {
-      if (cursor.consume("\\")) {
-        cursor.advance();
-        continue;
-      }
-      if (cursor.consume("`")) {
-        emit(continuation ? "templateTail" : "templateLiteral", start);
-        return;
-      }
-      if (cursor.consume("${")) {
-        templates.push(0);
-        emit(continuation ? "templateMiddle" : "templateHead", start);
-        return;
-      }
-      cursor.advance();
+    const result = templateChunk(context);
+    if (result[1] !== null) throw new ParseFailure(start, "closing backtick");
+    if (result[0][0].endsWith("`")) {
+      emit(continuation ? "templateTail" : "templateLiteral", start);
+    } else {
+      templates.push(0);
+      emit(continuation ? "templateMiddle" : "templateHead", start);
     }
-    throw new ParseFailure(start, "closing backtick");
   };
   while (!cursor.eof) {
     const start = cursor.offset;
-    const ws = whitespace(context);
-    if (ws[1] === null) {
-      newline ||= /[\r\n\u2028\u2029]/.test(ws[0][0]);
-      continue;
+    const c = cursor.peek()!;
+    const code = c.charCodeAt(0);
+    if (
+      code === 32 || code >= 9 && code <= 13 ||
+      code >= 128 && unicodeWhitespace.test(c)
+    ) {
+      const ws = whitespace(context);
+      if (ws[1] === null) {
+        newline ||= hasLineBreak.test(ws[0][0]);
+        continue;
+      }
     }
-    if (cursor.consume("//")) {
-      cursor.consumeWhile((c) => !/[\r\n\u2028\u2029]/.test(c));
+    if (c === "/" && cursor.consume("//")) {
+      lineComment(context);
       const raw = cursor.slice(start);
       const directiveMatch = /^\/\/\/\s*<([\w-]+)\b(.*?)\/?>\s*$/.exec(raw);
       const directive = directiveMatch
@@ -287,7 +325,7 @@ function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
       });
       continue;
     }
-    if (cursor.consume("/*")) {
+    if (c === "/" && cursor.consume("/*")) {
       const end = cursor.input.indexOf("*/", cursor.offset);
       if (end < 0) throw new ParseFailure(start, "closing comment");
       cursor.advance(end + 2 - cursor.offset);
@@ -302,28 +340,17 @@ function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
         raw,
         doc,
       });
-      if (doc) docs.push(doc);
-      newline ||= /[\r\n\u2028\u2029]/.test(raw);
+      if (doc) {
+        if (docs === noDocs) docs = [doc];
+        else docs.push(doc);
+      }
+      newline ||= hasLineBreak.test(raw);
       continue;
     }
-    const c = cursor.peek();
     if (c === '"' || c === "'") {
-      cursor.advance();
-      let closed = false;
-      while (!cursor.eof) {
-        if (cursor.consume("\\")) {
-          if (cursor.consume("\r")) cursor.consume("\n");
-          else cursor.advance();
-          continue;
-        }
-        if (cursor.consume(c)) {
-          closed = true;
-          break;
-        }
-        if (/[\r\n\u2028\u2029]/.test(cursor.peek()!)) break;
-        cursor.advance();
+      if (quotedString(context)[1] !== null) {
+        throw new ParseFailure(start, "closing quote");
       }
-      if (!closed) throw new ParseFailure(start, "closing quote");
       emit("string", start);
       continue;
     }
@@ -338,18 +365,22 @@ function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
       template(start, true);
       continue;
     }
-    if (number(context)[1] === null) {
+    if ((c >= "0" && c <= "9" || c === ".") && number(context)[1] === null) {
       emit("number", start);
       continue;
     }
-    if (identifier(context)[1] === null) {
+    if (
+      (c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c === "$" || c === "_" ||
+        c === "\\" || c.charCodeAt(0) >= 128) && identifier(context)[1] === null
+    ) {
       emit("identifier", start);
       continue;
     }
-    const punct = ["...", "=>", "**", "&&", "||", "??", "==", "!=", "?."].find((
-      p,
-    ) => cursor.input.startsWith(p, start));
-    if (punct) cursor.advance(punct.length);
+    if (c === "." && cursor.input.startsWith("...", start)) cursor.advance(3);
+    else if (
+      "=*&|?!".includes(c) &&
+      punctuationPairs.has(cursor.input.slice(start, start + 2))
+    ) cursor.advance(2);
     else if (c && "{}[]()<>,;:.?=+-*/%&|^!~#@".includes(c)) cursor.advance();
     else throw new ParseFailure(start, "declaration token");
     if (templates.length) {
@@ -358,24 +389,21 @@ function lex(cursor: SourceCursor): { tokens: Lexeme[]; comments: Comment[] } {
     }
     emit("punctuation", start);
   }
-  tokens.push({
-    text: "",
-    kind: "eof",
-    start: cursor.offset,
-    end: cursor.offset,
-    docs,
-    newline,
-  });
+  // EOF metadata is addressable at values.length without an empty token chunk.
+  tokens.kinds.push("eof");
+  tokens.starts.push(cursor.offset);
+  tokens.ends.push(cursor.offset);
+  tokens.docs.push(docs);
+  tokens.newlines.push(newline);
   return { tokens, comments };
 }
 
 // The lexer owns lexical context (comments, template boundaries and line breaks).
 // All syntactic choice, sequencing, recursion and repetition below use Nanolex.
 interface DeclarationContext extends Context {
-  lexemes: Lexeme[];
+  lexemes: Lexemes;
 }
-const token = (ctx: Context, pos = ctx.pos) =>
-  (ctx as DeclarationContext).lexemes[pos];
+const lexemes = (ctx: Context) => (ctx as DeclarationContext).lexemes;
 const literals = new Map<string, Grammar<string>>();
 function text(value: string): Grammar<string> {
   let grammar = literals.get(value);
@@ -402,15 +430,51 @@ function condition(
 }
 function category(kind: string): Grammar<string> {
   return and([
-    condition(kind, (ctx) => token(ctx).kind === kind),
-    consume(createToken(/[\s\S]+/, kind)),
+    condition(kind, (ctx) => lexemes(ctx).kinds[ctx.pos] === kind),
+    consumeAny(),
   ], ([, value]) => value);
 }
-const sameLine = condition("no line break", (ctx) => !token(ctx).newline);
-const lineBreak = condition("line break", (ctx) => token(ctx).newline);
+const lexemeKind: Grammar<string> = (
+  ctx,
+) => [lexemes(ctx).kinds[ctx.pos], null];
+const noBreakBeforeConsumed = condition(
+  "no line break",
+  (ctx) => !lexemes(ctx).newlines[ctx.pos - 1],
+);
+const lineBreak = condition(
+  "line break",
+  (ctx) => lexemes(ctx).newlines[ctx.pos],
+);
 const identifierToken = category("identifier");
 const stringToken = category("string");
 const numberToken = category("number");
+// A single-token type followed by a type boundary cannot have a prefix,
+// postfix, binary or conditional continuation. Keep this fast path in the
+// grammar so common leaf types do not traverse every precedence level.
+const atomicKinds = new Set([
+  "identifier",
+  "string",
+  "number",
+  "templateLiteral",
+]);
+const typeBoundaries = new Set([
+  ",",
+  ";",
+  "}",
+  ")",
+  "]",
+  ">",
+  ":",
+  "?",
+  "=",
+  "",
+]);
+const atomicTypeAhead = condition(
+  "single-token type",
+  (ctx) =>
+    atomicKinds.has(lexemes(ctx).kinds[ctx.pos]) &&
+    typeBoundaries.has(ctx.tokens[ctx.pos + 1] ?? ""),
+);
 const semicolon = or([
   text(";"),
   peek(text("}")),
@@ -425,32 +489,26 @@ function located<T>(
   build: (value: T) => Shape,
   kind = "",
 ): Grammar<Node> {
-  return (ctx) => {
-    const first = token(ctx);
-    const result = grammar(ctx);
-    if (result[1] !== null) return result;
-    const shape = build(result[0]);
+  return map(grammar, (parsed, ctx, start) => {
+    const stream = lexemes(ctx);
+    const docs = stream.docs[start];
+    const shape = build(parsed);
     // A precedence level with no operator returns its child unchanged.
     if ("start" in shape && "end" in shape) {
       const value = shape as Node;
-      return [
-        first.docs.length && first.docs !== value.docs
-          ? { ...value, docs: first.docs }
-          : value,
-        null,
-      ];
+      return docs.length && docs !== value.docs ? { ...value, docs } : value;
     }
-    const last = token(ctx, Math.max(0, ctx.pos - 1));
+    const end = stream.ends[Math.max(0, ctx.pos - 1)];
     const value: Node = {
       kind,
       children: [],
-      start: first.start,
-      end: last.end,
+      start: stream.starts[start],
+      end,
       ...shape,
     };
-    if (first.docs.length) value.docs = first.docs;
-    return [value, null];
-  };
+    if (docs.length) value.docs = docs;
+    return value;
+  });
 }
 const node = <T>(
   kind: string,
@@ -528,35 +586,42 @@ const parameterModifiers = [
 ];
 const memberNameFollower = not(either("(", "<", ":", "?", ";", "}", ",", "="));
 
+function typeChain(
+  operand: Grammar<Node>,
+  separator: string,
+  kind: string,
+): Grammar<Node> {
+  const chain = fold(operand, after(separator, operand), (left, right) => {
+    if (left.kind === kind) {
+      left.children.push(right);
+      left.end = right.end;
+      return left;
+    }
+    return extend(left, kind, [left, right], right.end);
+  });
+  return or([
+    located(
+      after(separator, chain),
+      (value) =>
+        value.kind === kind ? { kind, children: value.children } : value,
+    ),
+    chain,
+  ]);
+}
 function unionGrammar(conditional: boolean): Grammar<Node> {
-  return located(
-    and([
-      zeroOrOne(text("|")),
-      intersectionGrammar(conditional),
-      zeroOrMany(after("|", intersectionGrammar(conditional))),
-    ]),
-    ([, first, rest]) =>
-      rest.length ? { kind: "UnionType", children: [first, ...rest] } : first,
-  );
+  return typeChain(intersectionGrammar(conditional), "|", "UnionType");
 }
 function intersectionGrammar(conditional: boolean): Grammar<Node> {
-  const prefix = rule(conditional ? grammar.PREFIX : grammar.CONSTRAINT_PREFIX);
-  return located(
-    and([
-      zeroOrOne(text("&")),
-      prefix,
-      zeroOrMany(after("&", prefix)),
-    ]),
-    ([, first, rest]) =>
-      rest.length
-        ? { kind: "IntersectionType", children: [first, ...rest] }
-        : first,
+  return typeChain(
+    rule(conditional ? grammar.PREFIX : grammar.CONSTRAINT_PREFIX),
+    "&",
+    "IntersectionType",
   );
 }
 function prefixGrammar(conditional: boolean): Grammar<Node> {
   const prefix = rule(conditional ? grammar.PREFIX : grammar.CONSTRAINT_PREFIX);
   const inferConstraint = after("extends", rule(grammar.CONSTRAINT));
-  return or([
+  const [operator, inferred, assertion, constructor, fn, postfix] = [
     node(
       "TypeOperator",
       and([either("keyof", "readonly", "unique"), prefix]),
@@ -605,7 +670,7 @@ function prefixGrammar(conditional: boolean): Grammar<Node> {
     and(
       [
         rule(grammar.POSTFIX_TYPE),
-        zeroOrOne(and([sameLine, text("is"), rule(grammar.TYPE)])),
+        zeroOrOne(and([text("is"), noBreakBeforeConsumed, rule(grammar.TYPE)])),
       ],
       ([left, predicate]) =>
         predicate
@@ -623,7 +688,18 @@ function prefixGrammar(conditional: boolean): Grammar<Node> {
           )
           : left,
     ),
-  ]);
+  ];
+  return dispatch(consumeAny(), {
+    keyof: or([operator, postfix]),
+    readonly: or([operator, postfix]),
+    unique: or([operator, postfix]),
+    infer: or([inferred, postfix]),
+    asserts: or([assertion, postfix]),
+    new: or([constructor, postfix]),
+    abstract: or([constructor, postfix]),
+    "(": or([fn, postfix]),
+    "<": or([fn, postfix]),
+  }, postfix);
 }
 function templateGrammar(kind: string, value: Grammar<Node>): Grammar<Node> {
   const part = (categoryName: string) =>
@@ -662,87 +738,101 @@ function member(classMember: boolean): Grammar<Node> {
     rule(grammar.SIGNATURE),
     zeroOrOne(after(":", rule(grammar.TYPE))),
   ], ([parameters, result]) => [...parameters, ...present(result)]);
+  const memberChoices = [
+    ...(classMember ? [] : [
+      located(
+        and([zeroOrOne(text("new")), signature]),
+        ([construct, children]) => ({
+          kind: construct ? "ConstructSignature" : "CallSignature",
+          children,
+        }),
+      ),
+    ]),
+    node(
+      "IndexSignature",
+      and([
+        text("["),
+        id,
+        text(":"),
+        rule(grammar.TYPE),
+        text("]"),
+        text(":"),
+        rule(grammar.TYPE),
+      ]),
+      ([, name, , index, , , value]) => ({
+        children: [name, index, value],
+      }),
+    ),
+    located(
+      and([
+        zeroOrOne(
+          and(
+            [either("get", "set"), peek(memberNameFollower)],
+            ([value]) => value,
+          ),
+        ),
+        or([
+          node(
+            "ComputedName",
+            between("[", rule(grammar.EXPRESSION), "]"),
+            (value) => ({ children: [value] }),
+          ),
+          node(
+            "PrivateName",
+            after("#", id),
+            (value) => ({ name: `#${value.name}`, children: [value] }),
+          ),
+          name,
+        ]),
+        zeroOrOne(text("?")),
+        dispatch(
+          consumeAny(),
+          {
+            "(": and([signature], ([children]) => ({ method: true, children })),
+            "<": and([signature], ([children]) => ({ method: true, children })),
+          },
+          and(
+            [
+              zeroOrOne(after(":", rule(grammar.TYPE))),
+              zeroOrOne(after("=", rule(grammar.EXPRESSION))),
+            ],
+            ([type, value]) => ({
+              method: false,
+              children: [...present(type), ...present(value)],
+            }),
+          ),
+        ),
+      ]),
+      ([accessor, name, optional, tail]) => ({
+        kind: tail.method
+          ? classMember && name.name === "constructor"
+            ? "Constructor"
+            : accessor === "get"
+            ? "GetAccessor"
+            : accessor === "set"
+            ? "SetAccessor"
+            : "MethodSignature"
+          : "PropertySignature",
+        name: name.name,
+        optional: !!optional,
+        modifiers: present(accessor),
+        children: [name, ...tail.children],
+      }),
+    ),
+  ];
+  const namedMember = memberChoices[memberChoices.length - 1];
+  const indexMember = memberChoices[memberChoices.length - 2];
+  const callMember = classMember ? namedMember : memberChoices[0];
+  const selectedMember = dispatch(consumeAny(), {
+    "(": callMember,
+    "<": callMember,
+    new: classMember ? namedMember : or([callMember, namedMember]),
+    "[": or([indexMember, namedMember]),
+  }, namedMember);
   return located(
     and([
       modifiers(memberModifiers, memberNameFollower),
-      or([
-        ...(classMember ? [] : [
-          located(
-            and([zeroOrOne(text("new")), signature]),
-            ([construct, children]) => ({
-              kind: construct ? "ConstructSignature" : "CallSignature",
-              children,
-            }),
-          ),
-        ]),
-        node(
-          "IndexSignature",
-          and([
-            text("["),
-            id,
-            text(":"),
-            rule(grammar.TYPE),
-            text("]"),
-            text(":"),
-            rule(grammar.TYPE),
-          ]),
-          ([, name, , index, , , value]) => ({
-            children: [name, index, value],
-          }),
-        ),
-        located(
-          and([
-            zeroOrOne(
-              and(
-                [either("get", "set"), peek(memberNameFollower)],
-                ([value]) => value,
-              ),
-            ),
-            or([
-              node(
-                "ComputedName",
-                between("[", rule(grammar.EXPRESSION), "]"),
-                (value) => ({ children: [value] }),
-              ),
-              node(
-                "PrivateName",
-                after("#", id),
-                (value) => ({ name: `#${value.name}`, children: [value] }),
-              ),
-              name,
-            ]),
-            zeroOrOne(text("?")),
-            or([
-              and([signature], ([children]) => ({ method: true, children })),
-              and(
-                [
-                  zeroOrOne(after(":", rule(grammar.TYPE))),
-                  zeroOrOne(after("=", rule(grammar.EXPRESSION))),
-                ],
-                ([type, value]) => ({
-                  method: false,
-                  children: [...present(type), ...present(value)],
-                }),
-              ),
-            ]),
-          ]),
-          ([accessor, name, optional, tail]) => ({
-            kind: tail.method
-              ? classMember && name.name === "constructor"
-                ? "Constructor"
-                : accessor === "get"
-                ? "GetAccessor"
-                : accessor === "set"
-                ? "SetAccessor"
-                : "MethodSignature"
-              : "PropertySignature",
-            name: name.name,
-            optional: !!optional,
-            modifiers: present(accessor),
-            children: [name, ...tail.children],
-          }),
-        ),
-      ]),
+      selectedMember,
     ]),
     ([modifiers, value]) => ({
       kind: value.kind,
@@ -759,16 +849,11 @@ function binary(
   lower: Grammar<Node>,
   operators: Grammar<string>,
 ): Grammar<Node> {
-  return and(
-    [lower, zeroOrMany(and([operators, lower]))],
-    ([first, rest]) =>
-      rest.reduce(
-        (left, [operator, right]) =>
-          extend(left, "BinaryExpression", [left, right], right.end, {
-            operator,
-          }),
-        first,
-      ),
+  return fold(
+    lower,
+    and([operators, lower]),
+    (left, [operator, right]) =>
+      extend(left, "BinaryExpression", [left, right], right.end, { operator }),
   );
 }
 function expression(heritage: boolean): Grammar<Node> {
@@ -779,13 +864,15 @@ function expression(heritage: boolean): Grammar<Node> {
     and([
       condition(value, (ctx) => {
         const count = value.length;
-        const parts = (ctx as DeclarationContext).lexemes.slice(
-          ctx.pos,
-          ctx.pos + count,
-        );
-        return parts.length === count && parts.every((part, i) =>
-          part.text === value[i] && (!i || parts[i - 1].end === part.start)
-        );
+        const stream = lexemes(ctx);
+        for (let i = 0; i < count; i++) {
+          const pos = ctx.pos + i;
+          if (
+            ctx.tokens[pos] !== value[i] ||
+            (i > 0 && stream.ends[pos - 1] !== stream.starts[pos])
+          ) return false;
+        }
+        return true;
       }),
       ...Array.from(value, text),
     ], () => value);
@@ -881,10 +968,15 @@ const grammar = {
     return node(
       "QualifiedName",
       and([id, zeroOrMany(after(".", id))]),
-      ([first, rest]) => ({
-        children: [first, ...rest],
-        name: [first, ...rest].map((n) => n.name).join("."),
-      }),
+      ([first, rest]) => {
+        const children = [first, ...rest];
+        return {
+          children,
+          name: rest.length
+            ? children.map((n) => n.name).join(".")
+            : first.name,
+        };
+      },
     );
   },
   TYPE_PARAMETERS(): Grammar<Node[]> {
@@ -1006,12 +1098,12 @@ const grammar = {
     ]);
   },
   TYPE(): Grammar<Node> {
-    return and(
+    const full = and(
       [
         rule(this.UNION),
         zeroOrOne(and([
-          sameLine,
           text("extends"),
+          noBreakBeforeConsumed,
           rule(this.CONSTRAINT),
           text("?"),
           rule(this.TYPE),
@@ -1029,9 +1121,16 @@ const grammar = {
           )
           : left,
     );
+    return or([
+      and([atomicTypeAhead, rule(this.PRIMARY_TYPE)], ([, value]) => value),
+      full,
+    ]);
   },
   CONSTRAINT(): Grammar<Node> {
-    return unionGrammar(false);
+    return or([
+      and([atomicTypeAhead, rule(this.PRIMARY_TYPE)], ([, value]) => value),
+      unionGrammar(false),
+    ]);
   },
   UNION(): Grammar<Node> {
     return unionGrammar(true);
@@ -1043,29 +1142,40 @@ const grammar = {
     return prefixGrammar(false);
   },
   POSTFIX_TYPE(): Grammar<Node> {
-    return and(
-      [
-        rule(this.PRIMARY_TYPE),
-        zeroOrMany(
-          node(
-            "TypeSuffix",
-            and([sameLine, text("["), zeroOrOne(rule(this.TYPE)), text("]")]),
-            ([, , index]) => ({ children: present(index) }),
-          ),
+    return fold(
+      rule(this.PRIMARY_TYPE),
+      node(
+        "TypeSuffix",
+        and([
+          text("["),
+          noBreakBeforeConsumed,
+          zeroOrOne(rule(this.TYPE)),
+          text("]"),
+        ]),
+        ([, , index]) => ({ children: present(index) }),
+      ),
+      (left, suffix) =>
+        extend(
+          left,
+          suffix.children.length ? "IndexedAccessType" : "ArrayType",
+          [left, ...suffix.children],
+          suffix.end,
         ),
-      ],
-      ([first, rest]) =>
-        rest.reduce((left, suffix) =>
-          extend(
-            left,
-            suffix.children.length ? "IndexedAccessType" : "ArrayType",
-            [left, ...suffix.children],
-            suffix.end,
-          ), first),
     );
   },
   PRIMARY_TYPE(): Grammar<Node> {
-    return or([
+    const [
+      parenthesized,
+      object,
+      tuple,
+      typeofImport,
+      query,
+      imported,
+      template,
+      literal,
+      keyword,
+      reference,
+    ] = [
       node(
         "ParenthesizedType",
         between("(", rule(this.TYPE), ")"),
@@ -1126,7 +1236,41 @@ const grammar = {
         and([rule(this.QUALIFIED), rule(this.TYPE_ARGUMENTS)]),
         ([name, args]) => ({ name: name.name, children: [name, ...args] }),
       ),
-    ]);
+    ];
+    const keywordOrReference = or([keyword, reference]);
+    return dispatch(
+      consumeAny(),
+      {
+        "(": parenthesized,
+        "{": object,
+        "[": tuple,
+        typeof: or([typeofImport, query, reference]),
+        import: or([imported, reference]),
+        "-": literal,
+        true: literal,
+        false: literal,
+        null: literal,
+        any: keywordOrReference,
+        unknown: keywordOrReference,
+        never: keywordOrReference,
+        void: keywordOrReference,
+        undefined: keywordOrReference,
+        string: keywordOrReference,
+        number: keywordOrReference,
+        boolean: keywordOrReference,
+        bigint: keywordOrReference,
+        symbol: keywordOrReference,
+        object: keywordOrReference,
+        this: keywordOrReference,
+        intrinsic: keywordOrReference,
+      },
+      dispatch(lexemeKind, {
+        string: literal,
+        number: literal,
+        templateLiteral: template,
+        templateHead: template,
+      }, reference),
+    );
   },
   TUPLE_ELEMENT(): Grammar<Node> {
     return node(
@@ -1355,7 +1499,7 @@ const grammar = {
     );
   },
   DECLARATION_BODY(): Grammar<Node> {
-    return or([
+    const [alias, cls, iface, fn, variable, enumeration, module, imported] = [
       node(
         "TypeAliasDeclaration",
         and([
@@ -1435,7 +1579,21 @@ const grammar = {
         }),
       ),
       rule(this.IMPORT),
-    ]);
+    ];
+    return dispatch(consumeAny(), {
+      type: alias,
+      class: cls,
+      interface: iface,
+      function: fn,
+      const: variable,
+      let: variable,
+      var: variable,
+      enum: enumeration,
+      namespace: module,
+      module,
+      global: module,
+      import: imported,
+    });
   },
   DECLARATION(): Grammar<Node> {
     return or([
@@ -1649,16 +1807,16 @@ const grammar = {
 const declarationParser = createParser([createToken(/[\s\S]+/)], {
   ...grammar,
   SOURCE(): Grammar<DeclarationFile> {
-    const file = and(
+    const file = compile(and(
       [rule(this.DECLARATIONS), consume(EOF)],
       ([children]) => children,
-    );
+    ));
     return (ctx) => {
       try {
         const { tokens: lexemes, comments } = lex(new SourceCursor(ctx.input));
         const context: DeclarationContext = {
           input: ctx.input,
-          tokens: lexemes.slice(0, -1).map((value) => value.text),
+          tokens: lexemes.values,
           pos: 0,
           skipRule: null,
           lexemes,
@@ -1666,7 +1824,7 @@ const declarationParser = createParser([createToken(/[\s\S]+/)], {
         const result = file(context);
         if (result[1] !== null) {
           throw new ParseFailure(
-            token(context, result[0]).start,
+            context.lexemes.starts[result[0]],
             result[1].name,
           );
         }

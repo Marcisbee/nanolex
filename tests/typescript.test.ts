@@ -50,6 +50,9 @@ Deno.test("modern mapped, inferred, tuple, template and constructor types", () =
   assert.equal(all(tuple, "TupleElement")[0].optional, true);
   assert.equal(all(tuple, "TupleElement")[1].rest, true);
   assert.equal(type("abstract new <T>(value: T) => T").kind, "ConstructorType");
+  const escaped = type('`head\\`$${"x"}`');
+  assert.equal(escaped.children[0].name, "`head\\`$${");
+  assert.equal(escaped.children.at(-1)!.name, "}`");
   assert.equal(
     type('`x${`y${string}`}z${{ a: number }["a"]}`').children.length,
     5,
@@ -116,6 +119,8 @@ Deno.test("source positions, Unicode identifiers, escapes and documentation surv
     'const café: "a\\"b";',
   );
   assert.equal(tree.comments.at(-1)!.raw, "// trailing");
+  const continuedString = '"first\\\r\nsecond"';
+  assert.equal(type(continuedString).name, continuedString);
   assert.equal(
     parseDeclarations("declare const \\u0061: 1_000n;").children.length,
     1,
@@ -170,6 +175,7 @@ Deno.test("invalid declarations fail instead of becoming opaque balanced text", 
       "interface X extends {}",
       "type X = `abc${string;",
       "type X = 'unterminated;",
+      'type X = "first\nsecond";',
       "/** unterminated",
       "declare const x: string; garbage",
       "const x = @;",

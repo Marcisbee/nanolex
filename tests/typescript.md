@@ -7,15 +7,16 @@ parser or TypeScript compiler dependency.
 
 A separate lexer uses `SourceCursor` and `sourcePattern` to preserve trivia,
 Unicode offsets, line breaks and context-sensitive template token boundaries.
-The `SOURCE` entry rule adapts those lexemes to Nanolex's `Context`; small
-terminal predicates read token categories and line breaks, and a span wrapper
-attaches source metadata. These adapters do not recognize declarations or
-recursive types. Expression precedence is composed from grammar rules and AST
-folds. Conditional-type contexts use separate recursive rules, without mutable
-grammar flags. JSDoc uses combinator grammars for tags, links and balanced type
-annotations, followed by field normalization. Like the CSS and Markdown
-exercises, it lives under `tests/`; it is not a Nanolex package export and does
-not import the TypeScript compiler.
+Token text and source metadata are stored in parallel arrays. The `SOURCE` entry
+rule adapts those lexemes to Nanolex's `Context`; small terminal predicates read
+token categories, line breaks and single-token type boundaries, and a mapped
+span transform attaches source metadata. These adapters do not recognize
+declarations or recursive types. Expression precedence is composed from grammar
+rules and AST folds. Conditional-type contexts use separate recursive rules,
+without mutable grammar flags. JSDoc uses combinator grammars for tags, links
+and balanced type annotations, followed by field normalization. Like the CSS and
+Markdown exercises, it lives under `tests/`; it is not a Nanolex package export
+and does not import the TypeScript compiler.
 
 ```ts
 import { parseDeclarations } from "./typescript.ts";
@@ -102,10 +103,16 @@ Vue runtime-core use 5 warmups and 20 runs each. Each JSON output row includes
 file count, input bytes, repeat counts and median milliseconds. Compare runs on
 the same machine and runtime without concurrent CPU-heavy work.
 
-The grammar uses single token matches for keyword sets and reuses child AST
-nodes when a precedence level has no operator. JSDoc avoids additional parser
-passes for text without a possible link or leading type annotation. Nanolex's
-sequence combinator skips value-array allocation when its first rule fails;
-alternatives and optional rules forward untransformed results without extra
-result tuples. These optimizations retain the combinator grammar and its
-backtracking behavior.
+The grammar compiles its declaration and JSDoc combinators with Nanolex. The
+compiler generates JavaScript from the grammar; it does not substitute a
+handwritten declaration parser. Compilation happens once before warmed timing,
+requires dynamic code generation, and leaves the library interpreter as the
+default for other consumers.
+
+The grammar uses lookahead dispatch and single token matches for keyword sets
+and reuses child AST nodes when a precedence level has no operator. JSDoc avoids
+additional parser passes for text without a possible link or leading type
+annotation. Nanolex's sequence combinator skips value-array allocation when its
+first rule fails; alternatives and optional rules forward untransformed results
+without extra result tuples. These optimizations retain the combinator grammar
+and its backtracking behavior.
