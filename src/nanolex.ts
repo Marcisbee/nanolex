@@ -245,6 +245,28 @@ export const INFINITE_LOOP: Token = {
   test: () => false,
 };
 
+// Compilation metadata is private; ordinary grammars remain callable functions.
+type Recipe = { kind: string; [key: string]: any };
+const recipes = new WeakMap<Grammar<any>, Recipe>();
+function describe<T>(recipe: Recipe, grammar: Grammar<T>): Grammar<T> {
+  recipes.set(grammar, recipe);
+  return grammar;
+}
+
+/** Transform a grammar value with its starting token position and context. */
+export function map<T, U>(
+  grammar: Grammar<T>,
+  transform: (value: T, context: Context, start: number) => U,
+): Grammar<U> {
+  return describe({ kind: "map", grammar, transform }, (ctx) => {
+    const start = ctx.pos;
+    const result = grammar(ctx);
+    return result[1] === null
+      ? [transform(result[0], ctx, start), null]
+      : result;
+  });
+}
+
 /**
  * Sequence (AND) combinator.
  * When no transform is provided the resulting value is a tuple whose
@@ -261,19 +283,27 @@ export function and(
   rules: readonly Grammar<any>[],
   transform?: (values: any[]) => any,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "and", rules, transform }, (ctx) => {
     const startPos = ctx.pos;
-    const values: any[] = [];
-    for (const rule of rules) {
-      const [vOrPos, tokenOrNull] = rule(ctx);
-      if (tokenOrNull !== null) {
+    // Most alternatives fail on their first rule. Avoid allocating their
+    // value array, and forward failures without allocating another tuple.
+    if (rules.length === 0) return [transform ? transform([]) : [], null];
+    const first = rules[0](ctx);
+    if (first[1] !== null) {
+      ctx.pos = startPos;
+      return first;
+    }
+    const values: any[] = [first[0]];
+    for (let i = 1; i < rules.length; i++) {
+      const result = rules[i](ctx);
+      if (result[1] !== null) {
         ctx.pos = startPos;
-        return [vOrPos as number, tokenOrNull];
+        return result;
       }
-      values.push(vOrPos);
+      values.push(result[0]);
     }
     return [transform ? transform(values) : values, null];
-  };
+  });
 }
 
 /**
@@ -288,7 +318,7 @@ export function consume(
   token: Token,
   transform?: (v: string) => unknown,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "consume", token, transform }, (ctx) => {
     const chunks = ctx.tokens;
     let i = ctx.pos;
     const n = chunks.length;
@@ -328,7 +358,7 @@ export function consume(
     }
 
     return [i, token];
-  };
+  });
 }
 
 /**
@@ -341,7 +371,7 @@ export function consumeAny(): Grammar<string>;
 export function consumeAny(
   transform?: (v: string) => unknown,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "consumeAny", transform }, (ctx) => {
     const chunks = ctx.tokens;
     let i = ctx.pos;
     while (i < chunks.length && !chunks[i]) i++;
@@ -350,7 +380,7 @@ export function consumeAny(
     const value = chunks[i];
     ctx.pos = i + 1;
     return [transform ? transform(value) : value, null];
-  };
+  });
 }
 
 /**
@@ -484,19 +514,78 @@ export function or(
   rules: readonly Grammar<any>[],
   transform?: (value: any) => any,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "or", rules, transform }, (ctx) => {
     const startPos = ctx.pos;
     let lastError: [number, Token] | null = null;
     for (const rule of rules) {
       const res = rule(ctx);
       if (res[1] === null) {
-        return [transform ? transform(res[0]) : res[0], null];
+        return transform ? [transform(res[0]), null] : res;
       }
       lastError = res as [number, Token];
       ctx.pos = startPos;
     }
     return lastError || [startPos, EOF];
-  };
+  });
+}
+
+/**
+ * Select a grammar using non-consuming lookahead. The selected grammar starts
+ * at the original position and failures restore that position. The fallback is
+ * used for an unmatched key, not for failure of an explicitly selected branch.
+ */
+export function dispatch<K extends PropertyKey, T>(
+  selector: Grammar<K>,
+  branches: Partial<Record<K, Grammar<T>>>,
+  fallback?: Grammar<T>,
+): Grammar<T> {
+  return describe({ kind: "dispatch", selector, branches, fallback }, (ctx) => {
+    const start = ctx.pos;
+    const selected = selector(ctx);
+    ctx.pos = start;
+    if (selected[1] !== null) return selected;
+    const branch = Object.prototype.hasOwnProperty.call(branches, selected[0])
+      ? branches[selected[0]]
+      : fallback;
+    if (!branch) return [start, UNEXPECTED];
+    const result = branch(ctx);
+    if (result[1] !== null) ctx.pos = start;
+    return result;
+  });
+}
+
+/**
+ * Parse an initial value and fold repeated suffixes into it without collecting
+ * an intermediate list. A failing suffix is left unconsumed. Like zeroOrMany,
+ * a successful suffix must advance the input.
+ */
+export function fold<T, U>(
+  initial: Grammar<T>,
+  suffix: Grammar<U>,
+  combine: (value: T, next: U) => T,
+): Grammar<T> {
+  return describe({ kind: "fold", initial, suffix, combine }, (ctx) => {
+    const start = ctx.pos;
+    const first = initial(ctx);
+    if (first[1] !== null) {
+      ctx.pos = start;
+      return first;
+    }
+    let result = first;
+    while (true) {
+      const position = ctx.pos;
+      const next = suffix(ctx);
+      if (next[1] !== null) {
+        ctx.pos = position;
+        return result;
+      }
+      if (ctx.pos === position) {
+        ctx.pos = start;
+        return [position, INFINITE_LOOP];
+      }
+      result = [combine(result[0], next[0]), null];
+    }
+  });
 }
 
 /**
@@ -517,7 +606,7 @@ export function zeroOrMany(
   transform?: (vs: any[]) => unknown,
   until?: Grammar<any>,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "zeroOrMany", rule, transform, until }, (ctx) => {
     const values: any[] = [];
     while (true) {
       if (until) {
@@ -538,7 +627,7 @@ export function zeroOrMany(
       }
     }
     return [transform ? transform(values) : values, null];
-  };
+  });
 }
 
 /**
@@ -666,27 +755,27 @@ export function zeroOrOne(
   rule: Grammar<any>,
   transform?: (v: any) => unknown,
 ): Grammar<any> {
-  return (ctx) => {
+  return describe({ kind: "zeroOrOne", rule, transform }, (ctx) => {
     const startPos = ctx.pos;
     const res = rule(ctx);
     if (res[1] === null) {
-      return [transform ? transform(res[0]) : res[0], null];
+      return transform ? [transform(res[0]), null] : res;
     }
     ctx.pos = startPos;
     return [undefined, null];
-  };
+  });
 }
 
 /**
  * Peek (lookahead) - value is preserved, position is restored.
  */
 export function peek<V>(rule: Grammar<V>): Grammar<V> {
-  return (ctx) => {
+  return describe({ kind: "peek", rule }, (ctx) => {
     const startPos = ctx.pos;
     const res = rule(ctx);
     ctx.pos = startPos;
     return res;
-  };
+  });
 }
 
 /**
@@ -694,7 +783,7 @@ export function peek<V>(rule: Grammar<V>): Grammar<V> {
  * Always produces null as its value.
  */
 export function not(rule: Grammar<any>): Grammar<null> {
-  return (ctx) => {
+  return describe({ kind: "not", rule }, (ctx) => {
     const startPos = ctx.pos;
     const res = rule(ctx);
     ctx.pos = startPos;
@@ -702,7 +791,7 @@ export function not(rule: Grammar<any>): Grammar<null> {
       return [startPos, UNEXPECTED];
     }
     return [null, null];
-  };
+  });
 }
 
 /**
@@ -712,7 +801,7 @@ export function skipIn<V>(
   skip: Grammar<any> | null,
   rule: Grammar<V>,
 ): Grammar<V> {
-  return (ctx) => {
+  return describe({ kind: "skipIn", skip, rule }, (ctx) => {
     const prevSkip = ctx.skipRule;
     ctx.skipRule = skip;
     const res = rule(ctx);
@@ -726,7 +815,7 @@ export function skipIn<V>(
 
     ctx.skipRule = prevSkip;
     return res;
-  };
+  });
 }
 
 /**
@@ -736,7 +825,10 @@ export function skipIn<V>(
  * becomes contextually typed.
  */
 export function rule<V>(r: () => Grammar<V>): Grammar<V> {
-  return (ctx) => (r as any).cached(ctx);
+  return describe(
+    { kind: "rule", factory: r },
+    (ctx) => (r as any).cached(ctx),
+  );
 }
 
 /**
@@ -776,6 +868,7 @@ export function createParser<T>(
   tokens: Token[],
   rawRules: T,
   skipFactory?: () => Grammar<any>,
+  options?: { compile?: boolean },
 ): <K extends keyof T>(
   key: K,
   input: string,
@@ -788,6 +881,7 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
   tokens: Token[],
   rawRules: T,
   skipFactory?: () => Grammar<any>,
+  options?: { compile?: boolean },
 ): <K extends keyof T>(
   key: K,
   input: string,
@@ -817,7 +911,8 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
     if (!fullRule) {
       // Preserve the exact Grammar type of the base rule
       const base = rule(rawRules[key]) as ReturnType<T[typeof key]>;
-      fullRule = and([base, consume(EOF)], ([v]) => v);
+      const complete = and([base, consume(EOF)], ([v]) => v);
+      fullRule = options?.compile ? compile(complete) : complete;
       fullRules[key] = fullRule;
     }
 
@@ -837,4 +932,192 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
     }
     return res[0] as UnwrapGrammar<ReturnType<T[typeof key]>>;
   };
+}
+
+/**
+ * Compile a registered combinator grammar once. Custom grammars and trivia
+ * consumption retain their ordinary callable behavior. Compilation uses the
+ * Function constructor; use the interpreter where CSP disallows dynamic code.
+ * Compile after createParser has registered recursive rule factories. Treat
+ * the grammar structure as fixed after compilation.
+ */
+export function compile<T>(grammar: Grammar<T>): Grammar<T> {
+  const bindings: any[] = [];
+  const functions: string[] = [];
+  const ids = new Map<Grammar<any>, number>();
+  let serial = 0;
+  const variable = () => `v${serial++}`;
+  const bind = (value: any) => {
+    const i = bindings.push(value) - 1;
+    return `b[${i}]`;
+  };
+  const callable = (fn: any) => `(0,${bind(fn)})`;
+  const eof = bind(EOF),
+    unexpected = bind(UNEXPECTED),
+    infinite = bind(INFINITE_LOOP);
+  function register(grammar: Grammar<any>): number {
+    const existing = ids.get(grammar);
+    if (existing !== undefined) return existing;
+    const id = functions.length;
+    ids.set(grammar, id);
+    functions.push("");
+    functions[id] = `f[${id}]=function(c,s){${
+      emit(grammar, "return false;")
+    }return true;};`;
+    return id;
+  }
+  function fallback(
+    grammar: Grammar<any>,
+    fail: string,
+    receiver?: string,
+  ): string {
+    const result = variable();
+    const call = receiver
+      ? `${bind(grammar)}.call(${receiver},c)`
+      : `${callable(grammar)}(c)`;
+    return `const ${result}=${call};if(${result}[1]!==null){s.p=${result}[0];s.e=${result}[1];${fail}}s.v=${result}[0];`;
+  }
+
+  function emit(
+    grammar: Grammar<any>,
+    fail: string,
+    receiver?: string,
+  ): string {
+    const r = recipes.get(grammar);
+    if (!r) return fallback(grammar, fail, receiver);
+    if (r.kind === "rule") {
+      const target = r.factory.cached;
+      if (!target) {
+        throw new Error(
+          "Compile recursive rules after createParser registration",
+        );
+      }
+      if (!recipes.has(target)) return fallback(target, fail, bind(r.factory));
+      return `if(!f[${register(target)}](c,s)){${fail}}`;
+    }
+    if (r.kind === "consume" || r.kind === "consumeAny") {
+      const chunk = variable(),
+        token = r.kind === "consume" ? bind(r.token) : null;
+      const value = r.transform ? `${callable(r.transform)}(${chunk})` : chunk;
+      return `const ${chunk}=c.tokens[c.pos];if(!c.skipRule&&${chunk}){${
+        token
+          ? `if(!${token}.test(${chunk})){s.p=c.pos;s.e=${token};${fail}}`
+          : ""
+      }c.pos++;s.v=${value};}else{${fallback(grammar, fail)}}`;
+    }
+    if (r.kind === "map") {
+      const start = variable();
+      return `const ${start}=c.pos;${emit(r.grammar, fail)}s.v=${
+        callable(r.transform)
+      }(s.v,c,${start});`;
+    }
+    if (r.kind === "and") {
+      const start = variable();
+      let code = `const ${start}=c.pos;`;
+      const values: string[] = [];
+      for (const child of r.rules) {
+        const value = variable();
+        code += `{${
+          emit(
+            child,
+            `c.pos=${start};${fail}`,
+            recipes.has(child) ? undefined : bind(r.rules),
+          )
+        }var ${value}=s.v;}`;
+        values.push(value);
+      }
+      const array = `[${values.join(",")}]`;
+      return code +
+        `s.v=${r.transform ? `${callable(r.transform)}(${array})` : array};`;
+    }
+    if (r.kind === "or") {
+      const start = variable(), done = variable();
+      let code = `const ${start}=c.pos;${done}:{`;
+      for (const child of r.rules) {
+        const alternative = variable();
+        code += `${alternative}:{${
+          emit(child, `c.pos=${start};break ${alternative};`)
+        }${
+          r.transform ? `s.v=${callable(r.transform)}(s.v);` : ""
+        }break ${done};}`;
+      }
+      if (!r.rules.length) code += `s.p=${start};s.e=${eof};`;
+      return code + fail + "}";
+    }
+    if (r.kind === "zeroOrOne" || r.kind === "peek" || r.kind === "not") {
+      const start = variable(), done = variable();
+      const onFailure = r.kind === "peek"
+        ? `c.pos=${start};${fail}`
+        : `c.pos=${start};s.v=${
+          r.kind === "not" ? "null" : "undefined"
+        };break ${done};`;
+      let code = `const ${start}=c.pos;${done}:{${emit(r.rule, onFailure)}`;
+      if (r.kind === "not") {
+        code += `c.pos=${start};s.p=${start};s.e=${unexpected};${fail}`;
+      } else if (r.kind === "peek") code += `c.pos=${start};`;
+      else if (r.transform) code += `s.v=${callable(r.transform)}(s.v);`;
+      return code + "}";
+    }
+    if (r.kind === "zeroOrMany" || r.kind === "fold") {
+      const folded = r.kind === "fold",
+        start = variable(),
+        values = variable(),
+        loop = variable(),
+        pos = variable();
+      let code = `const ${start}=c.pos;`;
+      if (folded) code += emit(r.initial, `c.pos=${start};${fail}`);
+      code += `let ${values}=${
+        folded ? "s.v" : "[]"
+      };${loop}:while(true){const ${pos}=c.pos;`;
+      if (r.until) {
+        const check = variable();
+        code += `${check}:{${
+          emit(r.until, `c.pos=${pos};break ${check};`)
+        }c.pos=${pos};break ${loop};}`;
+      }
+      code += emit(folded ? r.suffix : r.rule, `c.pos=${pos};break ${loop};`);
+      // Match zeroOrMany's transform/progress order; fold checks before combine.
+      if (!folded) code += `${values}.push(s.v);`;
+      code += `if(c.pos===${pos}){s.p=${pos};s.e=${infinite};${
+        folded ? `c.pos=${start};` : ""
+      }${fail}}`;
+      if (folded) code += `${values}=${callable(r.combine)}(${values},s.v);`;
+      code += `}s.v=${
+        !folded && r.transform ? `${callable(r.transform)}(${values})` : values
+      };`;
+      return code;
+    }
+    if (r.kind === "skipIn") {
+      const previous = variable(), matched = variable(), done = variable();
+      const skip = bind(r.skip);
+      return `const ${previous}=c.skipRule;let ${matched}=true;c.skipRule=${skip};${done}:{${
+        emit(r.rule, `${matched}=false;break ${done};`)
+      }}${
+        r.skip ? `c.skipRule=null;(0,${skip})(c);c.skipRule=${skip};` : ""
+      }c.skipRule=${previous};if(!${matched}){${fail}}`;
+    }
+    if (r.kind === "dispatch") {
+      const start = variable(),
+        index = variable(),
+        branches = new Map<PropertyKey, number>();
+      for (const key of Reflect.ownKeys(r.branches)) {
+        branches.set(key, r.branches[key] ? register(r.branches[key]) : -1);
+      }
+      const missing = r.fallback ? register(r.fallback) : -1;
+      return `const ${start}=c.pos;${
+        emit(r.selector, `c.pos=${start};${fail}`)
+      }c.pos=${start};const ${index}=${
+        bind(branches)
+      }.get(typeof s.v==='symbol'?s.v:String(s.v))??${missing};if(${index}<0){s.p=${start};s.e=${unexpected};${fail}}if(!f[${index}](c,s)){c.pos=${start};${fail}}`;
+    }
+    return fallback(grammar, fail);
+  }
+  const root = register(grammar);
+  const factory = new Function(
+    "b",
+    `"use strict";const f=[];${
+      functions.join("\n")
+    }return function(c){const s={v:undefined,p:0,e:${eof}};return f[${root}](c,s)?[s.v,null]:[s.p,s.e];};`,
+  );
+  return factory(bindings) as Grammar<T>;
 }

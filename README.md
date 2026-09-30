@@ -271,3 +271,33 @@ const TrailingList = and([
 ## License
 
 [MIT](LICENSE) &copy; [Marcis](https://github.com/Marcisbee)
+
+## Optional grammar compilation
+
+`createParser(tokens, rules, skipFactory, { compile: true })` compiles each
+entry rule on its first use. The default remains the ordinary interpreter. For a
+standalone grammar, call `compile(grammar)` after recursive rule factories have
+been registered by `createParser`.
+
+Compilation specializes Nanolex combinators into JavaScript and avoids temporary
+result tuples between them. Custom grammars and trivia consumption retain their
+normal callable behavior. Values, transforms, lookahead and rollback follow the
+same contracts as interpreted grammars. Treat the grammar structure as fixed
+after compiling; compile again after changing its rule lists or branch tables.
+Compilation uses the `Function` constructor and has a one-time cost. Use the
+interpreter in environments whose Content Security Policy disallows dynamic code
+generation.
+
+Three helpers support grammars with many alternatives or AST nodes:
+
+- `dispatch(selector, branches, fallback?)` uses a grammar as non-consuming
+  lookahead to choose a branch by its returned key. An unmatched key uses the
+  fallback; a selected branch's failure does not. Both selector and branch
+  failures restore the starting position.
+- `fold(initial, suffix, combine)` parses an initial value and folds repeated
+  suffixes into it without collecting an intermediate list. A failing suffix
+  remains unconsumed. Each successful suffix must advance the input.
+- `map(grammar, transform)` transforms a value with access to its context and
+  starting token position: `transform(value, context, start)`. The context is
+  positioned at the end of the match, allowing source metadata to be attached
+  without implementing grammar control flow in a custom parser.

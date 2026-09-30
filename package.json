@@ -10,7 +10,9 @@
     "dev": "node ./scripts/dev.mjs",
     "lint": "deno lint",
     "declarations": "tsc --declarationDir dist --emitDeclarationOnly --declaration",
-    "postbuild": "cat package.json | sed '/\\\"devDependencies\\\"/,/}/ d; /^$/d' | sed 's/\\.\\/dist\\//\\.\\//g' > ./dist/package.json && cp README.md dist && cp LICENSE dist"
+    "postbuild": "cat package.json | sed '/\\\"devDependencies\\\"/,/}/ d; /^$/d' | sed 's/\\.\\/dist\\//\\.\\//g' > ./dist/package.json && cp README.md dist && cp LICENSE dist",
+    "bench:typescript": "deno run --allow-read tests/typescript.benchmark.ts",
+    "test:typescript": "deno test --allow-read --allow-env tests/typescript.test.ts tests/typescript.corpus.test.ts"
   },
   "repository": {
     "type": "git",
@@ -30,9 +32,16 @@
   },
   "homepage": "https://github.com/Marcisbee/nanolex#readme",
   "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
     "commonmark-spec": "^0.31.2",
+    "deno": "2.5.0",
     "esbuild": "^0.28.1",
-    "typescript": "^5.3.3"
+    "exome": "2.8.1",
+    "typescript": "^5.3.3",
+    "typescript-current": "npm:typescript@7.0.2",
+    "typescript-reference": "npm:typescript@6.0.3",
+    "vue": "3.5.42"
   },
   "exports": {
     "./package.json": "./dist/package.json",
