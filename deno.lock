@@ -60,9 +60,16 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:@types/node@22.20.2",
+        "npm:@types/react@19.3.0",
         "npm:commonmark-spec@~0.31.2",
+        "npm:deno@2.5.0",
         "npm:esbuild@~0.28.1",
-        "npm:typescript@^5.3.3"
+        "npm:exome@2.8.1",
+        "npm:typescript@6.0.3",
+        "npm:typescript@7.0.2",
+        "npm:typescript@^5.3.3",
+        "npm:vue@3.5.42"
       ]
     }
   }
