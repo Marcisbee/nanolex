@@ -301,3 +301,9 @@ Three helpers support grammars with many alternatives or AST nodes:
   starting token position: `transform(value, context, start)`. The context is
   positioned at the end of the match, allowing source metadata to be attached
   without implementing grammar control flow in a custom parser.
+
+## TypeScript declaration parser
+
+The declaration and JSDoc grammar, corpus tests and benchmarks now live in
+[dts-parser](https://github.com/Marcisbee/dts-parser). Nanolex continues to
+provide the combinators and compilation APIs used by that standalone parser.
