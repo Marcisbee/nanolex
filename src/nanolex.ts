@@ -82,7 +82,7 @@ export class SourceCursor {
 
   match(pattern: RegExp): RegExpExecArray | null {
     const flags = pattern.flags.replace(/[gy]/g, "");
-    const anchored = new RegExp(`^(?:${pattern.source})`, flags);
+    const anchored = new RegExp(pattern.source, flags + "y");
     const match = anchored.exec(this.remaining);
     if (match) this.offset += match[0].length;
     return match;
@@ -141,9 +141,10 @@ export function sourcePattern<S = undefined>(
   expected = pattern.source,
 ): SourceGrammar<RegExpExecArray, S> {
   const flags = pattern.flags.replace(/[gy]/g, "");
-  const anchored = new RegExp(`^(?:${pattern.source})`, flags);
+  const anchored = new RegExp(pattern.source, flags + "y");
   return (context) => {
     const offset = context.cursor.offset;
+    anchored.lastIndex = 0;
     const matched = anchored.exec(context.cursor.remaining);
     if (matched) context.cursor.advance(matched[0].length);
     return matched ? [matched, null] : [null, { offset, expected }];
@@ -211,7 +212,10 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
     : pattern.source;
 
   // Precompile an anchored full-match regex for RegExp tokens
-  const fullRegex = isString ? null : new RegExp(`^${source}$`);
+  const fullRegex = isString ? null : new RegExp(
+    `(?:${source})(?![\\s\\S])`,
+    pattern.flags.replace(/[gy]/g, "") + "y",
+  );
 
   return {
     pattern,
@@ -219,7 +223,10 @@ export function createToken(pattern: string | RegExp, name?: string): Token {
     name: name || source,
     test: isString
       ? (value: string): boolean => value === pattern
-      : (value: string): boolean => (fullRegex as RegExp).test(value),
+      : (value: string): boolean => {
+        (fullRegex as RegExp).lastIndex = 0;
+        return (fullRegex as RegExp).test(value);
+      },
   };
 }
 
@@ -886,8 +893,44 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
   key: K,
   input: string,
 ) => UnwrapGrammar<ReturnType<T[K]>> {
-  const tokenRegex = new RegExp(
-    "(" + tokens.map((t) => t.source).join("|") + ")",
+  // The combined splitter is faster, but only safe without flags or captures.
+  // Be conservative: ambiguous escapes and unfamiliar group syntax stay local.
+  const canCombine = tokens.length > 0 && tokens.every((token) => {
+    if (
+      typeof token.pattern !== "string" &&
+      token.pattern.flags.replace(/[gy]/g, "")
+    ) return false;
+    let inClass = false;
+    for (let i = 0; i < token.source.length; i++) {
+      const char = token.source[i];
+      if (char === "\\") {
+        if (/[1-9k]/.test(token.source[++i])) return false;
+      } else if (char === "[") {
+        inClass = true;
+      } else if (char === "]") {
+        inClass = false;
+      } else if (
+        char === "(" && !inClass &&
+        !["?:", "?=", "?!"].includes(token.source.slice(i + 1, i + 3))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  });
+  const combined = canCombine
+    ? new RegExp(
+      "(" + tokens.map((token) => `(?:${token.source})`).join("|") + ")",
+    )
+    : null;
+  // Separate expressions preserve per-token flags, capture numbering and names.
+  const tokenRegexes = combined ? [] : tokens.map((token) =>
+    new RegExp(
+      token.source,
+      (typeof token.pattern === "string"
+        ? ""
+        : token.pattern.flags.replace(/[gy]/g, "")) + "y",
+    )
   );
 
   // Precompute & cache concrete Grammar instances on each rule function
@@ -899,7 +942,32 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
   const skipRule = skipFactory ? skipFactory() : null;
 
   return (key, input) => {
-    const tokensArr = input.split(tokenRegex);
+    const tokensArr: string[] = combined ? input.split(combined) : [];
+    if (!combined) {
+      let start = 0;
+      let offset = 0;
+      while (offset < input.length) {
+        let match: RegExpExecArray | null = null;
+        for (const regex of tokenRegexes) {
+          regex.lastIndex = offset;
+          const candidate = regex.exec(input);
+          // Unicode matching can rewind an offset inside a surrogate pair.
+          if (candidate && candidate.index === offset) {
+            match = candidate;
+            break;
+          }
+        }
+        if (!match || (match[0].length === 0 && offset === start)) {
+          offset++;
+          continue;
+        }
+        tokensArr.push(input.slice(start, offset));
+        if (match[0].length > 0) tokensArr.push(match[0]);
+        start = offset + match[0].length;
+        offset = start;
+      }
+      tokensArr.push(input.slice(start));
+    }
     const ctx: Context = {
       input,
       tokens: tokensArr,

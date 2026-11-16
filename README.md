@@ -132,7 +132,7 @@ checkpoint rollback without building a token array.
 
 `createToken(pattern: string | RegExp, name?: string)`
 
-Defines a token. When you pass a `RegExp`, the engine splits input using a combined alternation of all token sources. For regex tokens, the whole chunk must match (implicit ^...$ optimization via caching).
+Defines a token. When you pass a `RegExp`, the engine matches each token with its own flags and keeps only the full match as a chunk. Capturing groups and backreferences remain local to that token. For regex tokens, the whole chunk must match. The `g` and `y` flags do not carry matching state between tokens or parses.
 Order of tokens in the array influences splitting precedence.
 
 `EOF` – Special end-of-file sentinel token.
@@ -263,7 +263,7 @@ const TrailingList = and([
 
 ## Performance Notes
 
-- Token splitting happens once per input string using a combined alternation regex for all tokens.
+- Token splitting happens once per input string. Patterns without semantic flags, captures, or ambiguous escapes use a combined regex when safe; other patterns use separate regexes in array order.
 - Each token test uses a cached result to avoid repeated regex engine work.
 - Combinators are allocation-light; most arrays are user-facing (e.g., list rule outputs).
 - Failures unwind immediately—no excessive backtracking in typical grammars.

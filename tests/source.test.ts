@@ -50,3 +50,34 @@ Deno.test("createSourceParser isolates per-parse state", () => {
 	expect(parse("id42")).toBe("1:42");
 	expect(parse("id7")).toBe("1:7");
 });
+
+Deno.test("source regex matching cannot skip to a later line", () => {
+	const pattern = /b$/gmy;
+	pattern.lastIndex = 2;
+	const cursor = new SourceCursor("xa\nb");
+	cursor.advance();
+	expect(cursor.match(pattern)).toBeNull();
+	expect(cursor.offset).toBe(1);
+	cursor.advance(2);
+	expect(cursor.match(pattern)?.[0]).toBe("b");
+	expect(cursor.eof).toBe(true);
+	expect(pattern.lastIndex).toBe(2);
+
+});
+
+Deno.test("sourcePattern rejects later-line matches and resets between calls", () => {
+	const pattern = /b$/gmy;
+	const match = sourcePattern(pattern);
+	const context = { cursor: new SourceCursor("xa\nb"), state: undefined };
+	context.cursor.advance();
+	expect(match(context)).toEqual([null, { offset: 1, expected: "b$" }]);
+	expect(context.cursor.offset).toBe(1);
+	context.cursor.advance(2);
+	expect(match(context)[0]?.[0]).toBe("b");
+	context.cursor.restore(3);
+	expect(match(context)[0]?.[0]).toBe("b");
+
+	const parse = createSourceParser(sourcePattern(/b$/m));
+	expect(() => parse("a\nb")).toThrow("Parse error: expected b$ at 0");
+	expect(parse("b")[0]).toBe("b");
+});

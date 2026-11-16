@@ -1,5 +1,8 @@
 // deno-lint-ignore-file no-import-prefix
-import { assertEquals } from "https://deno.land/std@0.215.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertThrows,
+} from "https://deno.land/std@0.215.0/assert/mod.ts";
 
 import {
   and,
@@ -10,6 +13,7 @@ import {
   createToken,
   type Grammar,
   not,
+  oneOrMany,
   or,
   zeroOrOne,
 } from "../src/nanolex.ts";
@@ -100,4 +104,105 @@ Deno.test("alternatives and optional rules retain values and backtracking", () =
   assertEquals(parser("VALUE", "abc"), [undefined, ["a", "b"], "C"]);
   assertEquals(parser("VALUE", "ab"), [undefined, ["a", "b"], undefined]);
   assertEquals(parser("TRANSFORMED", "b"), "B");
+});
+
+Deno.test("regex token flags are isolated and matching is reusable", () => {
+  const insensitive = createToken(/select/igy);
+  const sensitive = createToken(/END/);
+  const parser = createParser([insensitive, sensitive], {
+    S: () => and([consume(insensitive), consume(sensitive)]),
+  });
+  insensitive.pattern instanceof RegExp && (insensitive.pattern.lastIndex = 4);
+  for (let i = 0; i < 2; i++) {
+    assertEquals(parser("S", "SELECTEND"), ["SELECT", "END"]);
+    assertEquals(sensitive.test("end"), false);
+    assertThrows(() => parser("S", "SELECTend"), Error, "expected END");
+  }
+  for (
+    const [pattern, input] of [[/a.b/s, "a\nb"], [
+      /\u{1F600}+/u,
+      "😀😀",
+    ]] as const
+  ) {
+    const token = createToken(pattern);
+    const tail = createToken("!");
+    const parse = createParser([token, tail], {
+      S: () => and([consume(token), consume(tail)]),
+    });
+    assertEquals(parse("S", input + "!"), [input, "!"]);
+  }
+});
+
+Deno.test("regex alternatives classify only complete tokens", () => {
+  const identifier = createToken(/[a-z]+/);
+  const keyword = createToken(/if|else/m);
+  const parser = createParser([identifier, keyword], {
+    S: () =>
+      or([
+        consume(keyword, (v) => `KW:${v}`),
+        consume(identifier, (v) => `ID:${v}`),
+      ]),
+  });
+  for (const word of ["iffy", "bigelse", "if", "else"]) {
+    assertEquals(
+      parser("S", word),
+      `${["if", "else"].includes(word) ? "KW" : "ID"}:${word}`,
+    );
+  }
+  for (const value of ["if\n", "x\nelse", "if\nx"]) {
+    assertEquals(keyword.test(value), false);
+  }
+  assertEquals(createToken(/a|ab/).test("ab"), true);
+});
+
+Deno.test("token captures and backreferences do not introduce chunks", () => {
+  const string = createToken(/'([^']*)'/);
+  const separator = createToken(",");
+  const parse = createParser([string, separator], {
+    S: () => and([consume(string), consume(separator), consume(string)]),
+  });
+  assertEquals(parse("S", "'a','b'"), ["'a'", ",", "'b'"]);
+
+  const first = createToken(/(x)\1/);
+  const quoted = createToken(/(['"])(?<body>.*?)\1/);
+  const comma = createToken(",");
+  const parser = createParser([first, quoted, comma], {
+    S: () =>
+      and([
+        consume(first),
+        consume(comma),
+        consume(quoted),
+        consume(comma),
+        consume(quoted),
+      ]),
+  });
+  assertEquals(parser("S", "xx,'a',\"b\""), ["xx", ",", "'a'", ",", '"b"']);
+});
+
+Deno.test("tokenization preserves priority, unmatched text and zero-width boundaries", () => {
+  for (
+    const [patterns, input, expected] of [
+      [[/a/, /ab/], "xab?", ["x", "a", "b?"]],
+      [[/ab/, /a/], "xab?", ["x", "ab", "?"]],
+      [[/(?=b)/], "abc", ["a", "bc"]],
+      [[/x*/], "abc", ["a", "b", "c"]],
+      [[/z/u], "😀z", ["😀", "z"]],
+      [[/(?:a|b)+/], "xabba?", ["x", "abba", "?"]],
+      [[/[()]/, /\[/, /\]/], "([x])", ["(", "[", "x", "]", ")"]],
+      [[/\\(a)/], "x\\ay", ["x", "\\a", "y"]],
+      [[new RegExp("\\1")], "x\x01y", ["x", "\x01", "y"]],
+      [[/(?<value>a)/, /(?<value>b)/], "ab", ["a", "b"]],
+    ] as const
+  ) {
+    // A never-matching capture makes the same grammar use separate expressions.
+    for (const definitions of [patterns, [...patterns, /(?!)()/]]) {
+      const parser = createParser(
+        definitions.map((pattern) => createToken(pattern)),
+        {
+          S: () => oneOrMany(consumeAny()),
+        },
+      );
+      assertEquals(parser("S", input), [...expected]);
+    }
+  }
 });
