@@ -893,8 +893,38 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
   key: K,
   input: string,
 ) => UnwrapGrammar<ReturnType<T[K]>> {
+  // The combined splitter is faster, but only safe without flags or captures.
+  // Be conservative: ambiguous escapes and unfamiliar group syntax stay local.
+  const canCombine = tokens.length > 0 && tokens.every((token) => {
+    if (
+      typeof token.pattern !== "string" &&
+      token.pattern.flags.replace(/[gy]/g, "")
+    ) return false;
+    let inClass = false;
+    for (let i = 0; i < token.source.length; i++) {
+      const char = token.source[i];
+      if (char === "\\") {
+        if (/[1-9k]/.test(token.source[++i])) return false;
+      } else if (char === "[") {
+        inClass = true;
+      } else if (char === "]") {
+        inClass = false;
+      } else if (
+        char === "(" && !inClass &&
+        !["?:", "?=", "?!"].includes(token.source.slice(i + 1, i + 3))
+      ) {
+        return false;
+      }
+    }
+    return true;
+  });
+  const combined = canCombine
+    ? new RegExp(
+      "(" + tokens.map((token) => `(?:${token.source})`).join("|") + ")",
+    )
+    : null;
   // Separate expressions preserve per-token flags, capture numbering and names.
-  const tokenRegexes = tokens.map((token) =>
+  const tokenRegexes = combined ? [] : tokens.map((token) =>
     new RegExp(
       token.source,
       (typeof token.pattern === "string"
@@ -912,30 +942,32 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
   const skipRule = skipFactory ? skipFactory() : null;
 
   return (key, input) => {
-    const tokensArr: string[] = [];
-    let start = 0;
-    let offset = 0;
-    while (offset < input.length) {
-      let match: RegExpExecArray | null = null;
-      for (const regex of tokenRegexes) {
-        regex.lastIndex = offset;
-        const candidate = regex.exec(input);
-        // Unicode matching can rewind an offset inside a surrogate pair.
-        if (candidate && candidate.index === offset) {
-          match = candidate;
-          break;
+    const tokensArr: string[] = combined ? input.split(combined) : [];
+    if (!combined) {
+      let start = 0;
+      let offset = 0;
+      while (offset < input.length) {
+        let match: RegExpExecArray | null = null;
+        for (const regex of tokenRegexes) {
+          regex.lastIndex = offset;
+          const candidate = regex.exec(input);
+          // Unicode matching can rewind an offset inside a surrogate pair.
+          if (candidate && candidate.index === offset) {
+            match = candidate;
+            break;
+          }
         }
+        if (!match || (match[0].length === 0 && offset === start)) {
+          offset++;
+          continue;
+        }
+        tokensArr.push(input.slice(start, offset));
+        if (match[0].length > 0) tokensArr.push(match[0]);
+        start = offset + match[0].length;
+        offset = start;
       }
-      if (!match || (match[0].length === 0 && offset === start)) {
-        offset++;
-        continue;
-      }
-      tokensArr.push(input.slice(start, offset));
-      if (match[0].length > 0) tokensArr.push(match[0]);
-      start = offset + match[0].length;
-      offset = start;
+      tokensArr.push(input.slice(start));
     }
-    tokensArr.push(input.slice(start));
     const ctx: Context = {
       input,
       tokens: tokensArr,

@@ -263,7 +263,7 @@ const TrailingList = and([
 
 ## Performance Notes
 
-- Token splitting happens once per input string, trying token regexes in array order at each position.
+- Token splitting happens once per input string. Patterns without semantic flags, captures, or ambiguous escapes use a combined regex when safe; other patterns use separate regexes in array order.
 - Each token test uses a cached result to avoid repeated regex engine work.
 - Combinators are allocation-light; most arrays are user-facing (e.g., list rule outputs).
 - Failures unwind immediately—no excessive backtracking in typical grammars.

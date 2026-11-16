@@ -180,16 +180,29 @@ Deno.test("token captures and backreferences do not introduce chunks", () => {
 });
 
 Deno.test("tokenization preserves priority, unmatched text and zero-width boundaries", () => {
-  for (const [patterns, input, expected] of [
-    [[/a/, /ab/], "xab?", ["x", "a", "b?"]],
-    [[/ab/, /a/], "xab?", ["x", "ab", "?"]],
-    [[/(?=b)/], "abc", ["a", "bc"]],
-    [[/x*/], "abc", ["a", "b", "c"]],
-    [[/z/u], "😀z", ["😀", "z"]],
-  ] as const) {
-    const parser = createParser(patterns.map((pattern) => createToken(pattern)), {
-      S: () => oneOrMany(consumeAny()),
-    });
-    assertEquals(parser("S", input), [...expected]);
+  for (
+    const [patterns, input, expected] of [
+      [[/a/, /ab/], "xab?", ["x", "a", "b?"]],
+      [[/ab/, /a/], "xab?", ["x", "ab", "?"]],
+      [[/(?=b)/], "abc", ["a", "bc"]],
+      [[/x*/], "abc", ["a", "b", "c"]],
+      [[/z/u], "😀z", ["😀", "z"]],
+      [[/(?:a|b)+/], "xabba?", ["x", "abba", "?"]],
+      [[/[()]/, /\[/, /\]/], "([x])", ["(", "[", "x", "]", ")"]],
+      [[/\\(a)/], "x\\ay", ["x", "\\a", "y"]],
+      [[new RegExp("\\1")], "x\x01y", ["x", "\x01", "y"]],
+      [[/(?<value>a)/, /(?<value>b)/], "ab", ["a", "b"]],
+    ] as const
+  ) {
+    // A never-matching capture makes the same grammar use separate expressions.
+    for (const definitions of [patterns, [...patterns, /(?!)()/]]) {
+      const parser = createParser(
+        definitions.map((pattern) => createToken(pattern)),
+        {
+          S: () => oneOrMany(consumeAny()),
+        },
+      );
+      assertEquals(parser("S", input), [...expected]);
+    }
   }
 });
