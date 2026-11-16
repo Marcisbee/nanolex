@@ -911,7 +911,7 @@ export function createParser<T extends Record<string, () => Grammar<any>>>(
         inClass = false;
       } else if (
         char === "(" && !inClass &&
-        !["?:", "?=", "?!"].includes(token.source.slice(i + 1, i + 3))
+        ["?:", "?=", "?!"].indexOf(token.source.slice(i + 1, i + 3)) === -1
       ) {
         return false;
       }
